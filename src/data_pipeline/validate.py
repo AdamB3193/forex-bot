@@ -287,7 +287,8 @@ def _run_all_checks() -> None:
 
     print(f'\n  Date boundaries from config:')
     print(f'    Train : 2005-01-01 .. {TRAIN_END_DATE}')
-    print(f'    Val   : {TRAIN_END_DATE[:4]+"-01-01":>12} (next year) .. {VAL_END_DATE}')
+    val_start_year = str(int(TRAIN_END_DATE[:4]) + 1)
+    print(f'    Val   : {(val_start_year + "-01-01"):>12} (next year) .. {VAL_END_DATE}')
     print(f'    Test  : {TEST_START_DATE} .. {pair_stats.get("EURUSD", {}).get("date_to","?")}')
 
     # =========================================================================

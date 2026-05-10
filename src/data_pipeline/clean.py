@@ -19,6 +19,7 @@ import bisect
 import logging
 import os
 import sys
+from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
@@ -372,6 +373,21 @@ def clean_all_pairs() -> None:
                 conn.commit()
             if deleted:
                 log.info('[%s] Deleted %d weekend rows from DB', pair, deleted)
+
+            # Refresh pair_metadata now that weekend rows have been deleted
+            with get_connection() as conn:
+                conn.execute(
+                    """
+                    UPDATE pair_metadata
+                    SET total_bars   = (SELECT COUNT(*)  FROM raw_ohlcv WHERE pair = ?),
+                        date_from    = (SELECT MIN(date) FROM raw_ohlcv WHERE pair = ?),
+                        date_to      = (SELECT MAX(date) FROM raw_ohlcv WHERE pair = ?),
+                        last_updated = ?
+                    WHERE pair = ?
+                    """,
+                    (pair, pair, pair, datetime.now(timezone.utc).isoformat(), pair),
+                )
+                conn.commit()
 
             n_gaps    = int(cleaned['is_gap'].sum())
             n_anomaly = int(cleaned['is_anomaly'].sum())

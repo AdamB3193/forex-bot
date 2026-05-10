@@ -8,7 +8,9 @@
       "PowerShell(tail -3)",
       "PowerShell($env:PYTHONUTF8 = '1'; cd \"C:\\\\Users\\\\Adam\\\\OneDrive\\\\Documents\\\\Projects\\\\Forex Bot\"; python -m pytest tests\\\\test_data_pipeline.py -v 2>&1)",
       "PowerShell(New-Item -ItemType Directory -Path \"C:\\\\Users\\\\Adam\\\\OneDrive\\\\Documents\\\\Projects\\\\Forex Bot\\\\Past Chats\" -Force)",
-      "Bash(python3 -)"
+      "Bash(python3 -)",
+      "PowerShell($env:PYTHONUTF8 = '1'; cd \"C:\\\\Users\\\\Adam\\\\OneDrive\\\\Documents\\\\Projects\\\\Forex Bot\"; python src\\\\data_pipeline\\\\validate.py 2>&1 | Select-String -Pattern \"CHECK 4|SPLIT|train|val|test|TEST SET|Date bound|Train :|Val   :|Test  :\" | ForEach-Object { $_.Line })",
+      "Bash(git add *)"
     ]
   }
 }
