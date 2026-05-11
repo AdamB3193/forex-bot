@@ -15,9 +15,6 @@ __pycache__/
 *.pyo
 .pytest_cache/
 
-# Past Chats reference folder
-Past Chats/
-
 # OS files
 .DS_Store
 Thumbs.db

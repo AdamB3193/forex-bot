@@ -1,0 +1,270 @@
+================================================================================
+CLAUDE CODE SESSION -- FOREX BOT RL ENVIRONMENT (STEP 2)
+================================================================================
+
+--------------------------------------------------------------------------------
+[001] YOU
+--------------------------------------------------------------------------------
+I am building a deep reinforcement learning forex trading bot. This is Step 2 of a multi-step project: building the Gymnasium trading environment that the PPO agent will train inside.
+
+The project root is: C:\Users\Adam\OneDrive\Documents\Projects\Forex Bot
+
+CONTEXT:
+- Step 1 (data pipeline) is complete. The SQLite database at data\db\forex_bot.db contains 126,736 daily OHLCV bars for 24 forex pairs (2005–2026), cleaned, timezone-normalized to NY close, with ATR-14, ATR-200, tick_vol_zscore, split_set (train/val/test), and is_anomaly columns.
+- src\zone_engine\sr_engine.py exists — it is the full S&R zone detection engine (LuxAlgo port + Nick Shawn extensions). It has a SREngine class with a get_nearest_zones(pair, df, current_idx) method that returns 2 support + 2 resistance zone feature vectors, each a 12-element numpy array.
+- The RL agent uses PPO from stable-baselines3 with an LSTM Actor-Critic policy.
+- Do NOT import or use pandas_ta anywhere. Use the 'ta' library or manual numpy/pandas calculations only.
+
+TRADING STRATEGY BEING REPLICATED (Nick Shawn's S&R method):
+- Enter trades only when price is at a support or resistance zone
+- Enter at the midpoint of the zone, stop loss just past the far edge
+- Default 1:1 R:R but close losers early (average ~0.3–0.5R loss), hold winners to full TP
+- Risk 10% of account per trade (this is Nick's actual method — keep it)
+- Mean reversion philosophy: price bounces from zones more often than breaks
+- No indicators — purely price action at S&R zones
+- Set-and-forget: once entered, trade manages itself to TP or stops out
+
+STEP 2 REQUIREMENTS — build these files:
+
+FILE 1: src\rl_agent\environment.py
+Build a custom Gymnasium environment class ForexTradingEnv(gymnasium.Env) with:
+
+OBSERVATION SPACE:
+A flat numpy array (dtype float32) containing:
+- 4 zone feature vectors × 12 features each = 48 values
+  (2 nearest support zones + 2 nearest resistance zones, from sr_engine.get_nearest_zones())
+- Price action context (8 values):
+    price_to_zone_dist_support_1  (distance to nearest support as % of ATR-14)
+    price_to_zone_dist_support_2
+    price_to_zone_dist_resistance_1
+    price_to_zone_dist_resistance_2
+    current_atr_14_normalized     (ATR-14 / close price — dimensionless)
+    current_atr_200_normalized    (ATR-200 / close price)
+    tick_vol_zscore               (from database)
+    day_of_week                   (0=Monday … 4=Friday, normalized to [0,1])
+- Trade state (6 values):
+    in_trade                      (0 or 1)
+    trade_direction               (-1=short, 0=none, +1=long, normalized to [0,1])
+    unrealized_pnl_in_R           (current P&L in R-multiples, clipped to [-3, +3])
+    bars_in_trade                 (number of bars since entry, normalized by 20)
+    account_equity_normalized     (current equity / starting equity)
+    drawdown_pct                  (max drawdown from peak, as fraction)
+- Correlation flags (4 values):
+    usd_strength_index            (avg z-score of USD pairs — simple average)
+    jpy_strength_index
+    gbp_strength_index
+    risk_sentiment                (+1 if AUD/JPY trending up = risk-on, -1 = risk-off, normalized)
+
+Total observation size: 48 + 8 + 6 + 4 = 66 elements
+Use gymnasium.spaces.Box(low=-10, high=10, shape=(66,), dtype=np.float32)
+
+ACTION SPACE:
+gymnasium.spaces.Discrete(6) with actions:
+0 = PASS       (do nothing / wait)
+1 = ENTER_LONG
+2 = ENTER_SHORT
+3 = HOLD       (explicit hold when in trade — same as PASS when out of trade)
+4 = CLOSE      (close current trade immediately at market)
+5 = PARTIAL_CLOSE (close 50% of position, let rest run — book partial profit)
+
+REWARD FUNCTION:
+R-based asymmetric reward that mirrors Nick Shawn's actual edge:
+- On CLOSE or stop-out: reward = realized_R (e.g. +1.0 for full TP, -0.35 for early close)
+- On PARTIAL_CLOSE: reward = 0.5 × current_unrealized_R (book partial, keep running)
+- On HOLD in a winning trade (unrealized_R > 0): small positive reward = +0.01 (patience bonus)
+- On HOLD in a losing trade (unrealized_R < -0.5R): small negative reward = -0.02 (penalize holding losers)
+- On ENTER when NOT near a zone (nearest zone dist > 1.5 × ATR): reward = -0.1 (bad entry penalty)
+- On ENTER when near a valid zone: reward = 0 (neutral — wait to see outcome)
+- On PASS when in trade: reward = same as HOLD
+- Invalid actions (e.g. ENTER when already in trade, CLOSE when not in trade): reward = -0.05
+
+TRADE MECHANICS:
+- Position sizing: risk exactly 10% of current account equity per trade
+- Entry price: midpoint of the nearest zone in the direction of trade
+- Stop loss: just past the far edge of the zone (zone top + 0.1×ATR for short, zone btm - 0.1×ATR for long)
+- Take profit: entry ± (entry - stop) × 1.0 (1:1 R:R)
+- Partial close: close 50% at current price, move stop to breakeven for remainder
+- Spread cost: deduct spread_est (from DB) on entry AND exit
+- Account starts at $100,000
+
+EPISODE STRUCTURE:
+- Each episode = one contiguous window of training data for one pair
+- Window length: 252 bars (roughly 1 year of trading days) drawn randomly from the train split
+- At episode start: randomly select a pair and a random starting bar from train split
+- The environment steps forward one bar at a time
+- Episode ends when: window is exhausted OR account equity drops below 50% of starting equity (blowup)
+- On reset(): new random pair + new random window
+
+ENVIRONMENT CLASS REQUIREMENTS:
+1. __init__(self, db_path, pairs, split='train', window_size=252, initial_equity=100_000.0)
+2. reset(self, seed=None, options=None) → (obs, info) following Gymnasium API
+3. step(self, action) → (obs, reward, terminated, truncated, info)
+4. _get_observation(self) → np.ndarray of shape (66,) dtype float32
+5. _compute_correlation_flags(self) → 4-element array
+6. render(self, mode='human') → print current state (optional, simple)
+7. A property current_pair and current_step for external monitoring
+
+IMPORTANT IMPLEMENTATION NOTES:
+- Load ALL training data into memory at __init__ time (one dict per pair, keyed by pair name) — do not query DB on every step
+- Pre-compute the SREngine zones for each pair at __init__ time using a rolling window approach: for each bar i, compute zones using bars [max(0, i-500) : i] so the agent only sees historically available zone information (no lookahead)
+- Clip all observation values to [-10, 10] to keep inputs bounded for the neural network
+- Handle edge cases: what if no zones are detected (return zero vectors), what if partial close already done in this trade (disallow second partial close), what if action is ENTER but already in a trade (invalid, penalize)
+- The environment must be fully vectorizable — no global state, all state in self
+
+FILE 2: src\rl_agent\__init__.py
+Empty file (package marker).
+
+FILE 3: src\zone_engine\__init__.py
+Empty file (package marker).
+
+FILE 4: tests\test_environment.py
+Write pytest tests:
+1. test_env_reset() — env.reset() returns obs of correct shape (66,) and dtype float32
+2. test_env_step_pass() — stepping with action PASS returns valid (obs, reward, terminated, truncated, info)
+3. test_obs_bounds() — all values in obs are within [-10, 10] after 50 random steps
+4. test_invalid_action_close_when_flat() — CLOSE when not in trade gives reward = -0.05
+5. test_invalid_action_enter_when_in_trade() — ENTER_LONG when already long gives reward = -0.05
+6. test_episode_terminates() — episode terminates before window_size if equity < 50% of start
+7. test_spread_deducted_on_entry() — equity decreases by spread amount on trade entry
+8. test_action_space() — action_space has 6 discrete actions
+9. test_observation_space() — observation_space shape is (66,) with correct bounds
+10. test_reproducible_reset() — same seed produces same first observation
+
+After writing both files, run:
+python -m pytest tests\test_environment.py -v
+
+All 10 tests must pass. Fix any failures before stopping.
+
+After tests pass, run a quick smoke test:
+python -c "
+import sys
+sys.path.insert(0, 'src')
+from rl_agent.environment import ForexTradingEnv
+from src.data_pipeline.config import DB_PATH, PAIRS
+
+env = ForexTradingEnv(db_path=DB_PATH, pairs=list(PAIRS.keys()), split='train')
+obs, info = env.reset(seed=42)
+print(f'Obs shape: {obs.shape}')
+print(f'Obs dtype: {obs.dtype}')
+print(f'Obs min/max: {obs.min():.4f} / {obs.max():.4f}')
+print(f'Action space: {env.action_space}')
+print(f'Current pair: {env.current_pair}')
+
+total_reward = 0
+for i in range(50):
+    action = env.action_space.sample()
+    obs, reward, terminated, truncated, info = env.step(action)
+    total_reward += reward
+    if terminated or truncated:
+        obs, info = env.reset()
+        break
+
+print(f'50-step smoke test complete. Total reward: {total_reward:.4f}')
+print('Environment is working correctly.')
+"
+
+Show me all output. Do not stop until all 10 tests pass and the smoke test completes successfully.
+
+--------------------------------------------------------------------------------
+[002] CLAUDE
+--------------------------------------------------------------------------------
+I'll start by exploring the existing codebase to understand the structure before building the environment.
+
+[Explored project structure, read sr_engine.py, config.py, database.py, test_data_pipeline.py, requirements.txt]
+[Checked gymnasium version: 1.2.3]
+[Checked stable-baselines3 version: 2.8.0]
+[Checked DB train data: confirmed 24 pairs with ~2600–3900 train bars each]
+
+Now I'll write the files in order.
+
+--------------------------------------------------------------------------------
+[003] YOU
+--------------------------------------------------------------------------------
+continue
+
+--------------------------------------------------------------------------------
+[004] CLAUDE
+--------------------------------------------------------------------------------
+Created src/zone_engine/__init__.py (empty package marker)
+Created src/rl_agent/__init__.py (empty package marker)
+
+Created src/rl_agent/environment.py with:
+- ForexTradingEnv(gymnasium.Env)
+- __init__: loads all train data from SQLite, precomputes SREngine zone features per
+  bar per pair (sequential step-by-step, no lookahead), precomputes cross-pair
+  correlation indices (USD/JPY/GBP strength + AUD/JPY risk sentiment) as
+  date-keyed dicts
+- reset(seed, options): picks random pair + random start bar, resets all trade state
+- step(action): checks auto stop/tp first, then processes agent action, deducts
+  entry spread from equity at entry time, advances bar, returns (obs, reward,
+  terminated, truncated, info)
+- _get_observation(): returns clipped 66-element float32 array (48 zone + 8 price
+  context + 6 trade state + 4 correlation flags)
+- _zone_stop_tp(): reconstructs zone geometry from ATR-normalised feature vectors
+  to derive stop and take-profit levels; ATR-based fallback for null zones
+- _enter_trade(): deducts spread cost from equity immediately on entry
+- current_pair / current_step properties
+- render() prints current state
+
+Created tests/test_environment.py with all 10 required tests.
+
+Ran tests:
+============================= test session starts =============================
+tests/test_environment.py::test_env_reset PASSED                         [ 10%]
+tests/test_environment.py::test_env_step_pass PASSED                     [ 20%]
+tests/test_environment.py::test_obs_bounds PASSED                        [ 30%]
+tests/test_environment.py::test_invalid_action_close_when_flat PASSED    [ 40%]
+tests/test_environment.py::test_invalid_action_enter_when_in_trade PASSED [ 50%]
+tests/test_environment.py::test_episode_terminates PASSED                [ 60%]
+tests/test_environment.py::test_spread_deducted_on_entry PASSED          [ 70%]
+tests/test_environment.py::test_action_space PASSED                      [ 80%]
+tests/test_environment.py::test_observation_space PASSED                 [ 90%]
+tests/test_environment.py::test_reproducible_reset PASSED                [100%]
+============================= 10 passed in 8.20s ==============================
+
+Ran smoke test:
+Obs shape: (66,)
+Obs dtype: float32
+Obs min/max: -3.4948 / 10.0000
+Action space: Discrete(6)
+Current pair: USDJPY
+50-step smoke test complete. Total reward: -4.1100
+Environment is working correctly.
+
+All 10 tests pass and the smoke test completes cleanly. Here is what was built:
+
+Files created:
+- src/zone_engine/__init__.py  — package marker
+- src/rl_agent/__init__.py     — package marker
+- src/rl_agent/environment.py  — ForexTradingEnv
+- tests/test_environment.py    — 10 tests
+
+Key implementation details:
+- Zone features are precomputed at __init__ by running SREngine.step(i) sequentially
+  for each bar — naturally causal, no lookahead
+- Spread is deducted from equity immediately at entry (spread_price × position_units),
+  satisfying test 7
+- Entry always executes when ENTER_LONG/SHORT is chosen outside a trade; zone proximity
+  only affects the reward signal (-0.1 penalty if dist > 1.5 ATR)
+- _zone_stop_tp() reconstructs zone geometry from the precomputed ATR-normalised feature
+  vectors to derive stop and take-profit levels
+- ATR-fallback stop (1.5×ATR) guards against null/zero zone vectors
+- Correlation indices (USD, JPY, GBP strength + AUD/JPY risk sentiment) are date-indexed
+  dicts built at init via 20-bar rolling z-scores, then tanh-squashed into the observation
+
+--------------------------------------------------------------------------------
+[005] YOU
+--------------------------------------------------------------------------------
+in the past chats folder. create a new .txt file and name it "session_2". include every text, every thing that was said, every line, and everything that was said in this entire chat session that we just had (do it in the same format as the text file thats already in the folder. then, after you're done creating the session 2 file, rename the first file that was in there, It's called "session_forex_bot_data_pipeline.txt"... rename that file, to "session_1".
+
+--------------------------------------------------------------------------------
+[006] CLAUDE
+--------------------------------------------------------------------------------
+[Located Past Chats folder at: C:\Users\Adam\OneDrive\Documents\Projects\Forex Bot\Past Chats]
+[Read existing session_forex_bot_data_pipeline.txt to match format]
+[Created session_2.txt with full session transcript]
+[Renamed session_forex_bot_data_pipeline.txt to session_1.txt]
+
+================================================================================
+END OF SESSION 2
+================================================================================
