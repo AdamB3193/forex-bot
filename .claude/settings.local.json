@@ -10,7 +10,10 @@
       "PowerShell(New-Item -ItemType Directory -Path \"C:\\\\Users\\\\Adam\\\\OneDrive\\\\Documents\\\\Projects\\\\Forex Bot\\\\Past Chats\" -Force)",
       "Bash(python3 -)",
       "PowerShell($env:PYTHONUTF8 = '1'; cd \"C:\\\\Users\\\\Adam\\\\OneDrive\\\\Documents\\\\Projects\\\\Forex Bot\"; python src\\\\data_pipeline\\\\validate.py 2>&1 | Select-String -Pattern \"CHECK 4|SPLIT|train|val|test|TEST SET|Date bound|Train :|Val   :|Test  :\" | ForEach-Object { $_.Line })",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(venv\\\\Scripts\\\\python.exe -c \"import gymnasium; print\\(gymnasium.__version__\\)\")",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\Adam\\\\OneDrive\\\\Documents\" -Directory -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -match \"past\" -or $_.Name -match \"chat\" } | Select-Object FullName)",
+      "PowerShell(Rename-Item -LiteralPath \"C:\\\\Users\\\\Adam\\\\OneDrive\\\\Documents\\\\Projects\\\\Forex Bot\\\\Past Chats\\\\session_forex_bot_data_pipeline.txt\" -NewName \"session_1.txt\")"
     ]
   }
 }
