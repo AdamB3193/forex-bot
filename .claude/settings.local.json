@@ -16,7 +16,12 @@
       "PowerShell(Rename-Item -LiteralPath \"C:\\\\Users\\\\Adam\\\\OneDrive\\\\Documents\\\\Projects\\\\Forex Bot\\\\Past Chats\\\\session_forex_bot_data_pipeline.txt\" -NewName \"session_1.txt\")",
       "Bash(python -m pytest tests\\\\test_risk_guard.py -v)",
       "Bash(python -m pytest \"tests/test_risk_guard.py\" -v)",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(python -c \"import stable_baselines3; print\\(stable_baselines3.__version__\\)\")",
+      "Bash(python -c \"from stable_baselines3.common.torch_layers import BaseFeaturesExtractor; print\\('OK'\\)\")",
+      "Bash(python -m pytest tests\\\\test_trainer.py -v)",
+      "Bash(python -m pytest \"tests\\\\test_trainer.py\" -v)",
+      "Bash(python -m pytest tests -v)"
     ]
   }
 }

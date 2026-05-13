@@ -1,0 +1,792 @@
+================================================================================
+CLAUDE CODE SESSION -- FOREX BOT PPO TRAINER (STEP 5)
+================================================================================
+
+--------------------------------------------------------------------------------
+[001] YOU
+--------------------------------------------------------------------------------
+I am building a deep reinforcement learning forex trading bot. Step 5 is the PPO training script -- the neural network architecture and the actual training loop.
+
+Project root: C:\Users\Adam\OneDrive\Documents\Projects\Forex Bot
+
+CONTEXT -- what already exists:
+- src\data_pipeline\ -- full data pipeline, SQLite DB at data\db\forex_bot.db
+- src\zone_engine\sr_engine.py -- S&R zone detection engine
+- src\rl_agent\environment.py -- ForexTradingEnv (Gymnasium env, obs=66, actions=6)
+- src\rl_agent\risk_guard.py -- RiskGuardWrapper (5 hard safety rules)
+- All 30 existing tests pass
+
+ARCHITECTURE DECISIONS (locked):
+- Algorithm: PPO from stable-baselines3
+- Policy: RecurrentPPO is NOT available in base stable-baselines3 -- use MlpPolicy with a custom
+  feature extractor that includes an LSTM layer, built via PyTorch and registered with SB3
+- Network: LSTM(input=66, hidden=128, num_layers=2) -> FC(256) -> FC(128) -> actor head + critic head
+- Training data: split='train' (2005-2019)
+- Validation data: split='val' (2020-2022) -- used for eval callback, NEVER trained on
+- Test data: split='test' (2023-2026) -- SEALED, never touched during training
+
+STEP 5 REQUIREMENTS -- build these files:
+
+FILE 1: src\rl_agent\trainer.py
+
+Build a complete training module with these components:
+
+COMPONENT A -- Custom LSTM Feature Extractor:
+class LSTMFeatureExtractor(BaseFeaturesExtractor):
+    - Inherits from stable_baselines3.common.torch_layers.BaseFeaturesExtractor
+    - __init__(self, observation_space, lstm_hidden=128, lstm_layers=2, fc1_out=256, fc2_out=128):
+        - LSTM: input_size=observation_space.shape[0] (=66), hidden_size=lstm_hidden,
+                num_layers=lstm_layers, batch_first=True
+        - FC layers: Linear(lstm_hidden, fc1_out) -> ReLU -> Linear(fc1_out, fc2_out) -> ReLU
+        - features_dim must equal fc2_out (128) -- pass to super().__init__
+        - Hidden state (h_n, c_n) initialized as zeros in forward(), reset each forward pass
+          (NOTE: this is a simplification -- true recurrence across steps requires SB3's
+          RecurrentPPO which needs sb3-contrib. We use stateless LSTM here: treat each
+          observation as a sequence of length 1, hidden state zeros each call.
+          This still gives the network LSTM capacity for future fine-tuning with sb3-contrib.)
+    - forward(self, observations: torch.Tensor) -> torch.Tensor:
+        - observations shape: (batch, 66)
+        - Reshape to (batch, 1, 66) for LSTM (sequence length = 1)
+        - Pass through LSTM, take output[:, -1, :] (last timestep)
+        - Pass through FC layers
+        - Return shape: (batch, 128)
+
+COMPONENT B -- make_env() factory function:
+def make_env(db_path, pairs, split='train', window_size=252, seed=None):
+    - Creates ForexTradingEnv wrapped in RiskGuardWrapper
+    - Returns a callable that gymnasium.make() style wrappers expect
+    - Used with stable_baselines3.common.env_util.make_vec_env
+
+COMPONENT C -- build_model() function:
+def build_model(train_env, device='auto') -> PPO:
+    - policy_kwargs = dict(
+          features_extractor_class=LSTMFeatureExtractor,
+          features_extractor_kwargs=dict(
+              lstm_hidden=128, lstm_layers=2, fc1_out=256, fc2_out=128
+          ),
+          net_arch=[],   # empty -- feature extractor already builds the full net
+          activation_fn=torch.nn.ReLU,
+      )
+    - PPO hyperparameters (starting values -- will be tuned in Step 6):
+        n_steps=2048          # steps per env per update
+        batch_size=256        # minibatch size
+        n_epochs=10           # epochs per update
+        gamma=0.99            # discount factor
+        gae_lambda=0.95       # GAE lambda
+        clip_range=0.2        # PPO clip
+        ent_coef=0.01         # entropy bonus (encourage exploration)
+        vf_coef=0.5           # value function coefficient
+        max_grad_norm=0.5     # gradient clipping
+        learning_rate=3e-4    # Adam LR
+    - verbose=1
+    - Return the PPO model
+
+COMPONENT D -- run_training() function:
+def run_training(
+    db_path: str,
+    pairs: list,
+    total_timesteps: int = 500_000,
+    n_envs: int = 4,
+    eval_freq: int = 10_000,
+    save_dir: str = 'models',
+    run_name: str = 'ppo_forex_v1',
+    device: str = 'auto',
+    seed: int = 42,
+) -> PPO:
+
+Steps inside run_training():
+1. Create vectorized training environment:
+   - Use make_vec_env with n_envs parallel environments
+   - Each env: ForexTradingEnv(split='train') wrapped in RiskGuardWrapper
+   - Use DummyVecEnv (not SubprocVecEnv -- simpler, avoids Windows multiprocessing issues)
+
+2. Create single evaluation environment:
+   - ForexTradingEnv(split='val') wrapped in RiskGuardWrapper
+   - Wrapped in gymnasium Monitor for episode stats
+
+3. Create EvalCallback:
+   - eval_freq=eval_freq (evaluate every N training steps)
+   - n_eval_episodes=5
+   - best_model_save_path=f'{save_dir}/{run_name}/best_model'
+   - log_path=f'{save_dir}/{run_name}/eval_logs'
+   - deterministic=True
+   - render=False
+
+4. Build PPO model with build_model()
+
+5. Call model.learn(total_timesteps=total_timesteps, callback=eval_callback, progress_bar=True)
+
+6. Save final model: model.save(f'{save_dir}/{run_name}/final_model')
+
+7. Print a clean training summary showing:
+   - Total timesteps trained
+   - Best eval reward achieved (from callback)
+   - Where models were saved
+   - Wall-clock training time
+
+8. Return the trained model
+
+COMPONENT E -- __main__ block:
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description='Train forex PPO agent')
+    parser.add_argument('--timesteps', type=int, default=500_000)
+    parser.add_argument('--envs',      type=int, default=4)
+    parser.add_argument('--eval-freq', type=int, default=10_000)
+    parser.add_argument('--run-name',  type=str, default='ppo_forex_v1')
+    parser.add_argument('--device',    type=str, default='auto')
+    parser.add_argument('--seed',      type=int, default=42)
+    args = parser.parse_args()
+
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from data_pipeline.config import DB_PATH, PAIRS
+
+    run_training(
+        db_path=DB_PATH,
+        pairs=list(PAIRS.keys()),
+        total_timesteps=args.timesteps,
+        n_envs=args.envs,
+        eval_freq=args.eval_freq,
+        run_name=args.run_name,
+        device=args.device,
+        seed=args.seed,
+    )
+
+FILE 2: tests\test_trainer.py
+Write pytest tests:
+1. test_lstm_extractor_output_shape() -- LSTMFeatureExtractor forward pass returns (batch, 128)
+2. test_lstm_extractor_dtype() -- output is float32
+3. test_build_model_returns_ppo() -- build_model() returns a PPO instance
+4. test_build_model_has_lstm_extractor() -- policy.features_extractor is LSTMFeatureExtractor
+5. test_make_env_callable() -- make_env() returns a callable; calling it returns a RiskGuardWrapper
+6. test_model_predict_shape() -- model.predict(obs) returns action in [0,5] range
+7. test_model_predict_deterministic() -- same obs + deterministic=True returns same action twice
+8. test_model_saves_and_loads() -- model.save/load round-trip produces same prediction
+9. test_run_training_short() -- run_training with total_timesteps=2048, n_envs=1 completes without error and returns PPO
+10. test_eval_callback_creates_files() -- after run_training, best_model directory exists
+
+After writing both files, run:
+python -m pytest tests\test_trainer.py -v
+
+All 10 tests must pass. Fix any failures before stopping.
+
+Then run the full test suite to make sure nothing regressed:
+python -m pytest tests\ -v
+
+All 40 tests must pass.
+
+Then run this quick smoke test to confirm the model trains and predicts:
+python -c "
+import sys, os
+sys.path.insert(0, 'src')
+from data_pipeline.config import DB_PATH, PAIRS
+from rl_agent.trainer import run_training
+
+print('Starting short training run (2048 steps, 1 env)...')
+model = run_training(
+    db_path=DB_PATH,
+    pairs=list(PAIRS.keys()),
+    total_timesteps=2048,
+    n_envs=1,
+    eval_freq=2048,
+    run_name='smoke_test',
+    device='cpu',
+    seed=42,
+)
+print(f'Model type: {type(model).__name__}')
+print(f'Policy type: {type(model.policy).__name__}')
+print('Smoke test complete -- PPO trainer is working.')
+"
+
+Show me ALL output from all three commands. Do not stop until all 40 tests pass and the smoke test completes.
+
+--------------------------------------------------------------------------------
+[002] CLAUDE
+--------------------------------------------------------------------------------
+I'll start by exploring the existing codebase to understand the structure, then build the trainer files.
+
+[Read src\rl_agent\environment.py -- full 509 lines]
+
+Key observations from environment.py:
+- ForexTradingEnv.__init__(self, db_path, pairs, split='train', window_size=252, initial_equity=100_000.0)
+- action_space = Discrete(6), observation_space = Box(-10, 10, shape=(66,), float32)
+- Loads data + precomputes zone features and correlation indices at init (no re-queries during episodes)
+- _usd_idx, _jpy_idx, _gbp_idx: date-keyed dicts of correlation values
+- _current_row(), current_pair property, _bars_in_trade attribute
+- Observation: np.concatenate([zf(48), price_ctx(8), trade_state(6), corr(4)])
+
+[Read src\rl_agent\risk_guard.py -- full 197 lines]
+
+Key observations from risk_guard.py:
+- RiskGuardWrapper(gymnasium.Wrapper)
+- __init__(self, env): super().__init__(env), initializes all guard state
+- reset(self, seed=None, options=None), step(self, action: int)
+- 5 rules applied in order, 0.02 penalty per rule fired
+
+[Read src\data_pipeline\config.py -- 87 lines]
+
+Key observations:
+- PAIRS: 24 pairs dict with pip_scale, tier, correlation_family, dukascopy_symbol
+- DB_PATH = C:\Users\Adam\...\Forex Bot\data\db\forex_bot.db
+- TRAIN_END_DATE='2019-12-31', VAL_END_DATE='2022-12-31', TEST_START_DATE='2023-01-01'
+
+[Read tests\test_environment.py (first 50 lines) -- confirmed import pattern:
+    _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    sys.path.insert(0, os.path.join(_ROOT, 'src'))
+    _PAIRS = list(PAIRS.keys())[:6], _WINDOW = 60, scope='module' fixtures]
+
+[Checked stable-baselines3 version: 2.8.0]
+[Verified: from stable_baselines3.common.torch_layers import BaseFeaturesExtractor -- OK]
+
+Now writing both files.
+
+[Wrote src\rl_agent\trainer.py -- full contents:]
+
+"""
+PPO training module for the forex RL agent.
+"""
+
+import os
+import sys
+import time
+
+import torch
+import numpy as np
+
+from stable_baselines3 import PPO
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+from stable_baselines3.common.env_util import make_vec_env
+from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.callbacks import EvalCallback
+from stable_baselines3.common.monitor import Monitor
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from rl_agent.environment import ForexTradingEnv
+from rl_agent.risk_guard import RiskGuardWrapper
+
+
+class LSTMFeatureExtractor(BaseFeaturesExtractor):
+    """
+    Stateless LSTM feature extractor for PPO MlpPolicy.
+
+    Each forward pass treats the single observation as a sequence of length 1,
+    resetting hidden state to zeros each call. This gives the network LSTM
+    capacity without requiring sb3-contrib's RecurrentPPO.
+    """
+
+    def __init__(self, observation_space, lstm_hidden=128, lstm_layers=2,
+                 fc1_out=256, fc2_out=128):
+        super().__init__(observation_space, features_dim=fc2_out)
+        input_size = observation_space.shape[0]
+        self.lstm = torch.nn.LSTM(
+            input_size=input_size,
+            hidden_size=lstm_hidden,
+            num_layers=lstm_layers,
+            batch_first=True,
+        )
+        self.fc = torch.nn.Sequential(
+            torch.nn.Linear(lstm_hidden, fc1_out),
+            torch.nn.ReLU(),
+            torch.nn.Linear(fc1_out, fc2_out),
+            torch.nn.ReLU(),
+        )
+
+    def forward(self, observations: torch.Tensor) -> torch.Tensor:
+        # observations: (batch, 66) -> unsqueeze to (batch, 1, 66)
+        x = observations.unsqueeze(1)
+        h0 = torch.zeros(
+            self.lstm.num_layers, x.size(0), self.lstm.hidden_size,
+            device=x.device, dtype=x.dtype,
+        )
+        c0 = torch.zeros(
+            self.lstm.num_layers, x.size(0), self.lstm.hidden_size,
+            device=x.device, dtype=x.dtype,
+        )
+        out, _ = self.lstm(x, (h0, c0))   # (batch, 1, lstm_hidden)
+        out = out[:, -1, :]               # (batch, lstm_hidden)
+        return self.fc(out)               # (batch, fc2_out=128)
+
+
+def make_env(db_path, pairs, split='train', window_size=252, seed=None):
+    """Return a thunk that creates ForexTradingEnv wrapped in RiskGuardWrapper."""
+    def _init():
+        env = ForexTradingEnv(
+            db_path=db_path, pairs=pairs, split=split, window_size=window_size,
+        )
+        return RiskGuardWrapper(env)
+    return _init
+
+
+def build_model(train_env, device='auto') -> PPO:
+    """Build a PPO model with the custom LSTM feature extractor."""
+    policy_kwargs = dict(
+        features_extractor_class=LSTMFeatureExtractor,
+        features_extractor_kwargs=dict(
+            lstm_hidden=128, lstm_layers=2, fc1_out=256, fc2_out=128,
+        ),
+        net_arch=[],
+        activation_fn=torch.nn.ReLU,
+    )
+    return PPO(
+        'MlpPolicy',
+        train_env,
+        policy_kwargs=policy_kwargs,
+        n_steps=2048,
+        batch_size=256,
+        n_epochs=10,
+        gamma=0.99,
+        gae_lambda=0.95,
+        clip_range=0.2,
+        ent_coef=0.01,
+        vf_coef=0.5,
+        max_grad_norm=0.5,
+        learning_rate=3e-4,
+        verbose=1,
+        device=device,
+    )
+
+
+def run_training(
+    db_path: str,
+    pairs: list,
+    total_timesteps: int = 500_000,
+    n_envs: int = 4,
+    eval_freq: int = 10_000,
+    save_dir: str = 'models',
+    run_name: str = 'ppo_forex_v1',
+    device: str = 'auto',
+    seed: int = 42,
+) -> PPO:
+    t0 = time.time()
+
+    # 1. Vectorized training environment (DummyVecEnv avoids Windows multiprocessing issues)
+    train_vec_env = make_vec_env(
+        make_env(db_path, pairs, split='train'),
+        n_envs=n_envs,
+        seed=seed,
+        vec_env_cls=DummyVecEnv,
+    )
+
+    # 2. Single validation environment for evaluation (never trained on)
+    eval_env = Monitor(RiskGuardWrapper(
+        ForexTradingEnv(db_path=db_path, pairs=pairs, split='val')
+    ))
+
+    # 3. EvalCallback -- evaluates on val split, saves best model
+    best_model_path = os.path.join(save_dir, run_name, 'best_model')
+    log_path = os.path.join(save_dir, run_name, 'eval_logs')
+    os.makedirs(best_model_path, exist_ok=True)
+    os.makedirs(log_path, exist_ok=True)
+
+    eval_callback = EvalCallback(
+        eval_env,
+        eval_freq=eval_freq,
+        n_eval_episodes=5,
+        best_model_save_path=best_model_path,
+        log_path=log_path,
+        deterministic=True,
+        render=False,
+    )
+
+    # 4. Build PPO model
+    model = build_model(train_vec_env, device=device)
+
+    # 5. Train
+    model.learn(
+        total_timesteps=total_timesteps,
+        callback=eval_callback,
+        progress_bar=True,
+    )
+
+    # 6. Save final model
+    final_dir = os.path.join(save_dir, run_name)
+    os.makedirs(final_dir, exist_ok=True)
+    model.save(os.path.join(final_dir, 'final_model'))
+
+    # 7. Training summary
+    elapsed = time.time() - t0
+    best_reward = eval_callback.best_mean_reward
+    print("\n" + "=" * 60)
+    print("Training complete!")
+    print(f"  Total timesteps : {total_timesteps:,}")
+    print(f"  Best eval reward: {best_reward:.4f}")
+    print(f"  Models saved to : {final_dir}/")
+    print(f"  Wall-clock time : {elapsed:.1f}s ({elapsed / 60:.1f} min)")
+    print("=" * 60)
+
+    return model
+
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description='Train forex PPO agent')
+    parser.add_argument('--timesteps', type=int, default=500_000)
+    parser.add_argument('--envs',      type=int, default=4)
+    parser.add_argument('--eval-freq', type=int, default=10_000)
+    parser.add_argument('--run-name',  type=str, default='ppo_forex_v1')
+    parser.add_argument('--device',    type=str, default='auto')
+    parser.add_argument('--seed',      type=int, default=42)
+    args = parser.parse_args()
+
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from data_pipeline.config import DB_PATH, PAIRS
+
+    run_training(
+        db_path=DB_PATH,
+        pairs=list(PAIRS.keys()),
+        total_timesteps=args.timesteps,
+        n_envs=args.envs,
+        eval_freq=args.eval_freq,
+        run_name=args.run_name,
+        device=args.device,
+        seed=args.seed,
+    )
+
+[Wrote tests\test_trainer.py -- full contents:]
+
+"""
+Pytest tests for trainer.py (Step 5).
+"""
+
+import os
+import sys
+import tempfile
+
+import numpy as np
+import gymnasium
+import pytest
+import torch
+
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(_ROOT, 'src'))
+
+from data_pipeline.config import DB_PATH, PAIRS
+from rl_agent.trainer import LSTMFeatureExtractor, make_env, build_model, run_training
+from rl_agent.environment import ForexTradingEnv
+from rl_agent.risk_guard import RiskGuardWrapper
+from stable_baselines3 import PPO
+from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.env_util import make_vec_env as sb3_make_vec_env
+
+_PAIRS = list(PAIRS.keys())[:6]
+_WINDOW = 60
+_TMPDIR = tempfile.mkdtemp()
+
+
+# -- Shared fixtures ----------------------------------------------------------
+
+@pytest.fixture(scope='module')
+def obs_space():
+    return gymnasium.spaces.Box(low=-10.0, high=10.0, shape=(66,), dtype=np.float32)
+
+
+@pytest.fixture(scope='module')
+def extractor(obs_space):
+    return LSTMFeatureExtractor(obs_space)
+
+
+@pytest.fixture(scope='module')
+def model():
+    vec_env = sb3_make_vec_env(
+        make_env(DB_PATH, _PAIRS, split='train', window_size=_WINDOW),
+        n_envs=1,
+        vec_env_cls=DummyVecEnv,
+    )
+    return build_model(vec_env, device='cpu')
+
+
+@pytest.fixture(scope='module')
+def trained_result():
+    return run_training(
+        db_path=DB_PATH,
+        pairs=_PAIRS,
+        total_timesteps=2048,
+        n_envs=1,
+        eval_freq=2048,
+        save_dir=os.path.join(_TMPDIR, 'models'),
+        run_name='test_run',
+        device='cpu',
+        seed=0,
+    )
+
+
+# -- 1. LSTMFeatureExtractor output shape -------------------------------------
+
+def test_lstm_extractor_output_shape(extractor):
+    obs = torch.zeros(4, 66)
+    out = extractor(obs)
+    assert out.shape == (4, 128), f"Expected (4, 128), got {out.shape}"
+
+
+# -- 2. LSTMFeatureExtractor output dtype -------------------------------------
+
+def test_lstm_extractor_dtype(extractor):
+    obs = torch.zeros(4, 66)
+    out = extractor(obs)
+    assert out.dtype == torch.float32, f"Expected float32, got {out.dtype}"
+
+
+# -- 3. build_model returns PPO -----------------------------------------------
+
+def test_build_model_returns_ppo(model):
+    assert isinstance(model, PPO)
+
+
+# -- 4. build_model has LSTMFeatureExtractor ----------------------------------
+
+def test_build_model_has_lstm_extractor(model):
+    assert isinstance(model.policy.features_extractor, LSTMFeatureExtractor)
+
+
+# -- 5. make_env returns callable that returns RiskGuardWrapper ---------------
+
+def test_make_env_callable():
+    thunk = make_env(DB_PATH, _PAIRS, split='train', window_size=_WINDOW)
+    assert callable(thunk)
+    env = thunk()
+    assert isinstance(env, RiskGuardWrapper)
+    env.close()
+
+
+# -- 6. model.predict returns action in [0, 5] --------------------------------
+
+def test_model_predict_shape(model):
+    obs = np.zeros(66, dtype=np.float32)
+    action, _ = model.predict(obs, deterministic=True)
+    assert 0 <= int(action.flat[0]) <= 5, f"Action {action} out of [0, 5]"
+
+
+# -- 7. model.predict is deterministic ----------------------------------------
+
+def test_model_predict_deterministic(model):
+    obs = np.zeros(66, dtype=np.float32)
+    a1, _ = model.predict(obs, deterministic=True)
+    a2, _ = model.predict(obs, deterministic=True)
+    assert int(a1.flat[0]) == int(a2.flat[0])
+
+
+# -- 8. model save/load round-trip --------------------------------------------
+
+def test_model_saves_and_loads(model):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = os.path.join(tmpdir, 'roundtrip_model')
+        model.save(path)
+        loaded = PPO.load(path, device='cpu')
+        obs = np.zeros(66, dtype=np.float32)
+        a1, _ = model.predict(obs, deterministic=True)
+        a2, _ = loaded.predict(obs, deterministic=True)
+        assert int(a1.flat[0]) == int(a2.flat[0])
+
+
+# -- 9. run_training short run completes and returns PPO ----------------------
+
+def test_run_training_short(trained_result):
+    assert isinstance(trained_result, PPO)
+
+
+# -- 10. EvalCallback creates best_model directory ----------------------------
+
+def test_eval_callback_creates_files(trained_result):
+    best_dir = os.path.join(_TMPDIR, 'models', 'test_run', 'best_model')
+    assert os.path.isdir(best_dir), f"best_model directory not found at {best_dir}"
+
+[Ran: python -m pytest "tests\test_trainer.py" -v]
+
+============================= test session starts =============================
+platform win32 -- Python 3.11.9, pytest-9.0.3, pluggy-1.6.0 -- C:\Users\Adam\OneDrive\Documents\Projects\Forex Bot\venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\Adam\OneDrive\Documents\Projects\Forex Bot
+plugins: anyio-4.13.0
+collecting ... collected 10 items
+
+tests/test_trainer.py::test_lstm_extractor_output_shape PASSED           [ 10%]
+tests/test_trainer.py::test_lstm_extractor_dtype PASSED                  [ 20%]
+tests/test_trainer.py::test_build_model_returns_ppo PASSED               [ 30%]
+tests/test_trainer.py::test_build_model_has_lstm_extractor PASSED        [ 40%]
+tests/test_trainer.py::test_make_env_callable PASSED                     [ 50%]
+tests/test_trainer.py::test_model_predict_shape PASSED                   [ 60%]
+tests/test_trainer.py::test_model_predict_deterministic PASSED           [ 70%]
+tests/test_trainer.py::test_model_saves_and_loads PASSED                 [ 80%]
+tests/test_trainer.py::test_run_training_short PASSED                    [ 90%]
+tests/test_trainer.py::test_eval_callback_creates_files PASSED           [100%]
+
+============================== warnings summary ===============================
+tests/test_trainer.py::test_run_training_short
+  C:\Users\Adam\OneDrive\Documents\Projects\Forex Bot\venv\Lib\site-packages\stable_baselines3\common\callbacks.py:719: TqdmExperimentalWarning: rich is experimental/alpha
+    self.pbar = tqdm(total=self.locals["total_timesteps"] - self.model.num_timesteps)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================= 10 passed, 1 warning in 25.30s ========================
+
+[Ran: python -m pytest tests -v]
+
+============================= test session starts =============================
+platform win32 -- Python 3.11.9, pytest-9.0.3, pluggy-1.6.0 -- C:\Users\Adam\OneDrive\Documents\Projects\Forex Bot\venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\Adam\OneDrive\Documents\Projects\Forex Bot
+plugins: anyio-4.13.0
+collecting ... collected 40 items
+
+tests/test_data_pipeline.py::test_database_schema PASSED                 [  2%]
+tests/test_data_pipeline.py::test_pair_metadata_complete PASSED          [  5%]
+tests/test_data_pipeline.py::test_no_sunday_dates PASSED                 [  7%]
+tests/test_data_pipeline.py::test_no_weekend_dates PASSED                [ 10%]
+tests/test_data_pipeline.py::test_ohlcv_logic PASSED                     [ 12%]
+tests/test_data_pipeline.py::test_split_no_contamination PASSED          [ 15%]
+tests/test_data_pipeline.py::test_known_anomalies_flagged PASSED         [ 17%]
+tests/test_data_pipeline.py::test_atr_not_null_after_warmup PASSED       [ 20%]
+tests/test_data_pipeline.py::test_gap_bars_have_zero_volume PASSED       [ 22%]
+tests/test_data_pipeline.py::test_pip_scale_matches_prices PASSED        [ 25%]
+tests/test_environment.py::test_env_reset PASSED                         [ 27%]
+tests/test_environment.py::test_env_step_pass PASSED                     [ 30%]
+tests/test_environment.py::test_obs_bounds PASSED                        [ 32%]
+tests/test_environment.py::test_invalid_action_close_when_flat PASSED    [ 35%]
+tests/test_environment.py::test_invalid_action_enter_when_in_trade PASSED [ 37%]
+tests/test_environment.py::test_episode_terminates PASSED                [ 40%]
+tests/test_environment.py::test_spread_deducted_on_entry PASSED          [ 42%]
+tests/test_environment.py::test_action_space PASSED                      [ 45%]
+tests/test_environment.py::test_observation_space PASSED                 [ 47%]
+tests/test_environment.py::test_reproducible_reset PASSED                [ 50%]
+tests/test_risk_guard.py::test_daily_loss_limit_blocks_entry PASSED      [ 52%]
+tests/test_risk_guard.py::test_consecutive_loss_circuit_breaker PASSED   [ 55%]
+tests/test_risk_guard.py::test_consecutive_loss_resets_on_win PASSED     [ 57%]
+tests/test_risk_guard.py::test_correlation_guard_usd PASSED              [ 60%]
+tests/test_risk_guard.py::test_max_bars_force_close PASSED               [ 62%]
+tests/test_risk_guard.py::test_equity_curve_filter PASSED                [ 65%]
+tests/test_risk_guard.py::test_blocked_reason_property PASSED            [ 67%]
+tests/test_risk_guard.py::test_rules_triggered_counter PASSED            [ 70%]
+tests/test_risk_guard.py::test_no_force_close_existing_on_correlation PASSED [ 72%]
+tests/test_risk_guard.py::test_wrapper_transparent_spaces PASSED         [ 75%]
+tests/test_trainer.py::test_lstm_extractor_output_shape PASSED           [ 77%]
+tests/test_trainer.py::test_lstm_extractor_dtype PASSED                  [ 80%]
+tests/test_trainer.py::test_build_model_returns_ppo PASSED               [ 82%]
+tests/test_trainer.py::test_build_model_has_lstm_extractor PASSED        [ 85%]
+tests/test_trainer.py::test_make_env_callable PASSED                     [ 87%]
+tests/test_trainer.py::test_model_predict_shape PASSED                   [ 90%]
+tests/test_trainer.py::test_model_predict_deterministic PASSED           [ 92%]
+tests/test_trainer.py::test_model_saves_and_loads PASSED                 [ 95%]
+tests/test_trainer.py::test_run_training_short PASSED                    [ 97%]
+tests/test_trainer.py::test_eval_callback_creates_files PASSED           [100%]
+
+============================== warnings summary ===============================
+tests/test_trainer.py::test_run_training_short
+  C:\Users\Adam\OneDrive\Documents\Projects\Forex Bot\venv\Lib\site-packages\stable_baselines3\common\callbacks.py:719: TqdmExperimentalWarning: rich is experimental/alpha
+    self.pbar = tqdm(total=self.locals["total_timesteps"] - self.model.num_timesteps)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================= 40 passed, 1 warning in 29.98s ========================
+
+[Ran smoke test:]
+
+python -c "
+import sys, os
+sys.path.insert(0, 'src')
+from data_pipeline.config import DB_PATH, PAIRS
+from rl_agent.trainer import run_training
+
+print('Starting short training run (2048 steps, 1 env)...')
+model = run_training(
+    db_path=DB_PATH,
+    pairs=list(PAIRS.keys()),
+    total_timesteps=2048,
+    n_envs=1,
+    eval_freq=2048,
+    run_name='smoke_test',
+    device='cpu',
+    seed=42,
+)
+print(f'Model type: {type(model).__name__}')
+print(f'Policy type: {type(model.policy).__name__}')
+print('Smoke test complete -- PPO trainer is working.')
+"
+
+Output:
+Starting short training run (2048 steps, 1 env)...
+Using cpu device
+Eval num_timesteps=2048, episode_reward=-0.02 +/- 0.02
+Episode length: 252.00 +/- 0.00
+---------------------------------
+| eval/              |          |
+|    mean_ep_length  | 252      |
+|    mean_reward     | -0.02    |
+| time/              |          |
+|    total_timesteps | 2048     |
+---------------------------------
+New best mean reward!
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 244      |
+|    ep_rew_mean     | -7.94    |
+| time/              |          |
+|    fps             | 756      |
+|    iterations      | 1        |
+|    time_elapsed    | 2        |
+|    total_timesteps | 2048     |
+---------------------------------
+ 100% --------------------------- 2,048/2,048  [ 0:00:02 < 0:00:00 , 746 it/s ]
+
+============================================================
+Training complete!
+  Total timesteps : 2,048
+  Best eval reward: -0.0200
+  Models saved to : models\smoke_test/
+  Wall-clock time : 27.8s (0.5 min)
+============================================================
+Model type: PPO
+Policy type: ActorCriticPolicy
+Smoke test complete -- PPO trainer is working.
+
+All three commands succeeded. Summary:
+
+10/10 trainer tests pass. 40/40 full suite passes (no regressions). Smoke test completes in 27.8s.
+Eval triggered once at step 2048, best model saved to models/smoke_test/best_model/.
+
+What was built:
+
+src\rl_agent\trainer.py -- four components:
+- LSTMFeatureExtractor: stateless LSTM(66->128, 2 layers) + FC(256->128) plugged into SB3's
+  MlpPolicy via BaseFeaturesExtractor. Each forward pass resets hidden state to zeros and
+  treats the single observation as sequence length 1. Features dim=128.
+- make_env(): factory function returning a thunk _init() that creates
+  ForexTradingEnv wrapped in RiskGuardWrapper. Compatible with SB3's make_vec_env.
+- build_model(): PPO with the LSTM extractor registered via policy_kwargs.
+  net_arch=[] (feature extractor IS the full network). Hyperparameters:
+  n_steps=2048, batch_size=256, n_epochs=10, gamma=0.99, gae_lambda=0.95,
+  clip_range=0.2, ent_coef=0.01, vf_coef=0.5, max_grad_norm=0.5, lr=3e-4.
+- run_training(): full training loop using DummyVecEnv (avoids Windows multiprocessing
+  issues), val-split eval env wrapped in SB3 Monitor, EvalCallback saves best model,
+  final model saved at end, clean summary printout.
+
+tests\test_trainer.py -- 10 tests:
+1.  test_lstm_extractor_output_shape       PASSED
+2.  test_lstm_extractor_dtype              PASSED
+3.  test_build_model_returns_ppo           PASSED
+4.  test_build_model_has_lstm_extractor    PASSED
+5.  test_make_env_callable                 PASSED
+6.  test_model_predict_shape               PASSED
+7.  test_model_predict_deterministic       PASSED
+8.  test_model_saves_and_loads             PASSED
+9.  test_run_training_short                PASSED
+10. test_eval_callback_creates_files       PASSED
+
+--------------------------------------------------------------------------------
+[003] YOU
+--------------------------------------------------------------------------------
+ok. now. create, in the Past Chats folder, a new .txt file called "session_4". have it say/include absolutely everything that was said, line for line, text for text, everything, that happened in this session. in the same format as the past 3 sessions we had(session_3.txt, session_2.txt, and session_1.txt, same format and stuffs of how it is).
+
+--------------------------------------------------------------------------------
+[004] CLAUDE
+--------------------------------------------------------------------------------
+[Read Past Chats\session_1.txt -- confirmed format: === header with session title, [NNN] YOU / [NNN] CLAUDE turns, full verbatim content including tool call descriptions and complete file contents written]
+[Read Past Chats\session_2.txt (first 80 lines) -- confirmed same format]
+[Read Past Chats\session_3.txt (full) -- confirmed format, noted CLAUDE turns include bracketed tool call descriptions followed by full code blocks and verbatim command output]
+
+[Wrote Past Chats\session_4.txt -- this file -- with all turns from this session:
+ the full Step 5 requirements prompt, Claude's exploration and reading notes,
+ both complete files written (trainer.py and test_trainer.py in full),
+ all three command outputs verbatim (pytest trainer, pytest full suite, smoke test),
+ and this closing turn.]
+
+================================================================================
+END OF SESSION 4
+================================================================================
