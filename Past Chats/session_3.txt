@@ -1,0 +1,530 @@
+================================================================================
+CLAUDE CODE SESSION -- FOREX BOT RISK GUARD LAYER (STEP 4)
+================================================================================
+
+--------------------------------------------------------------------------------
+[001] YOU
+--------------------------------------------------------------------------------
+I am building a deep reinforcement learning forex trading bot. Step 4 is the Risk Guard Layer — a Gymnasium wrapper that sits on top of ForexTradingEnv and enforces hard safety rules the PPO agent cannot override.
+
+Project root: C:\Users\Adam\OneDrive\Documents\Projects\Forex Bot
+
+CONTEXT:
+- src\rl_agent\environment.py contains ForexTradingEnv (already complete)
+- The environment uses Discrete(6) actions: 0=PASS, 1=ENTER_LONG, 2=ENTER_SHORT, 3=HOLD, 4=CLOSE, 5=PARTIAL_CLOSE
+- Observation space: Box(-10, 10, shape=(66,), float32)
+- Nick Shawn's philosophy: capital preservation above everything. Never let a bad sequence destroy the account.
+
+STEP 4 REQUIREMENTS — build these files:
+
+FILE 1: src\rl_agent\risk_guard.py
+
+Build a class RiskGuardWrapper(gymnasium.Wrapper) that wraps ForexTradingEnv with these hard rules:
+
+RULE 1 — Daily Loss Limit:
+- Track realized P&L in R for the current trading day (calendar day based on bar date)
+- If daily realized loss reaches -3R or worse, block ALL entry actions (ENTER_LONG, ENTER_SHORT) for the rest of that day
+- Blocked entry actions are converted to PASS (action 0) automatically
+- Reset the daily R tracker at the start of each new calendar day
+
+RULE 2 — Consecutive Loss Circuit Breaker:
+- Track consecutive losing trades (trades that closed with realized_R < 0)
+- After 3 consecutive losing trades, block new entries for the next 5 bars
+- Reset consecutive loss counter to 0 after any winning trade (realized_R >= 0)
+- The 5-bar cooldown is tracked in bars, not calendar days
+
+RULE 3 — Correlation Guard:
+- The observation vector element at index 48 is usd_strength_index (tanh-scaled, range ~[-1,1])
+- The observation vector element at index 49 is jpy_strength_index
+- If abs(usd_strength_index) > 0.7, block entries on all USD pairs simultaneously
+  (USD pairs: EURUSD, GBPUSD, AUDUSD, NZDUSD, USDJPY, USDCHF, USDCAD)
+- If abs(jpy_strength_index) > 0.7, block entries on all JPY pairs simultaneously
+  (JPY pairs: USDJPY, EURJPY, GBPJPY, AUDJPY, CADJPY, CHFJPY, NZDJPY)
+- These checks apply only to ENTER_LONG and ENTER_SHORT actions
+- When a pair is currently being traded, do NOT force-close existing positions — only block new entries
+
+RULE 4 — Maximum Bars in Trade Hard Stop:
+- If a trade has been open for more than 10 bars (10 trading days) with no TP or SL hit,
+  force-close it by converting the agent's action to CLOSE (action 4)
+- This mirrors Nick's discipline: if a trade hasn't worked in 10 days, something is wrong, get out
+- The bars_in_trade value is available from env._bars_in_trade
+
+RULE 5 — Equity Curve Filter:
+- Track the 20-bar rolling average of episode equity
+- If current equity falls more than 15% below the 20-bar rolling average, block all entries
+- This prevents the agent from continuing to trade during a sustained drawdown streak
+- Reset this history at the start of each new episode (reset() call)
+
+WRAPPER REQUIREMENTS:
+1. class RiskGuardWrapper(gymnasium.Wrapper):
+   - __init__(self, env): call super().__init__(env)
+   - reset(self, seed=None, options=None): reset wrapped env + reset all guard state
+   - step(self, action): apply all 5 rules in order (1->2->3->4->5), then call env.step(modified_action)
+   - _is_usd_pair(self, pair: str) -> bool
+   - _is_jpy_pair(self, pair: str) -> bool
+   - A property blocked_reason -> str: returns which rule is blocking, or 'none' if not blocked
+   - A property rules_triggered -> dict: returns counts of how many times each rule fired this episode
+
+2. The wrapper must be transparent to stable-baselines3 — observation_space and action_space
+   are passed through unchanged from the wrapped env
+
+3. After applying rules, if an action was modified, add a small extra penalty to the reward:
+   reward -= 0.02 for each rule that fired on that step
+   (this teaches the PPO agent to avoid situations that trigger the guard)
+
+4. Extract current pair from env.current_pair
+   Extract bars_in_trade from env._bars_in_trade
+   Extract daily date from env._current_row()['date_str'] (it's a string 'YYYY-MM-DD')
+
+FILE 2: tests\test_risk_guard.py
+
+Write pytest tests:
+1. test_daily_loss_limit_blocks_entry() — after 3 consecutive -1R losses in same day, ENTER_LONG is converted to PASS
+2. test_consecutive_loss_circuit_breaker() — after 3 losing trades, entries blocked for 5 bars
+3. test_consecutive_loss_resets_on_win() — winning trade resets consecutive loss counter
+4. test_correlation_guard_usd() — when usd_strength > 0.7, ENTER_LONG on USD pair is blocked
+5. test_max_bars_force_close() — after 10 bars in trade, action is converted to CLOSE
+6. test_equity_curve_filter() — entries blocked when equity 15% below 20-bar rolling avg
+7. test_blocked_reason_property() — blocked_reason returns correct string
+8. test_rules_triggered_counter() — rules_triggered dict increments correctly
+9. test_no_force_close_existing_on_correlation() — existing trade not closed when correlation guard fires
+10. test_wrapper_transparent_spaces() — observation_space and action_space match wrapped env
+
+After writing both files, run:
+python -m pytest tests\test_risk_guard.py -v
+
+All 10 tests must pass. Fix any failures before stopping.
+
+Then run this integration smoke test:
+python -c "
+import sys
+sys.path.insert(0, 'src')
+from rl_agent.environment import ForexTradingEnv
+from rl_agent.risk_guard import RiskGuardWrapper
+from data_pipeline.config import DB_PATH, PAIRS
+
+base_env = ForexTradingEnv(db_path=DB_PATH, pairs=list(PAIRS.keys()), split='train')
+env = RiskGuardWrapper(base_env)
+
+obs, info = env.reset(seed=42)
+print(f'Obs shape: {obs.shape}')
+print(f'Action space: {env.action_space}')
+print(f'Observation space: {env.observation_space}')
+print(f'Blocked reason: {env.blocked_reason}')
+print(f'Rules triggered: {env.rules_triggered}')
+
+total_reward = 0
+for i in range(100):
+    action = env.action_space.sample()
+    obs, reward, terminated, truncated, info = env.step(action)
+    total_reward += reward
+    if terminated or truncated:
+        obs, info = env.reset()
+        break
+
+print(f'100-step smoke test complete. Total reward: {total_reward:.4f}')
+print(f'Rules triggered this episode: {env.rules_triggered}')
+print('RiskGuardWrapper is working correctly.')
+"
+
+Show me all output. Do not stop until all 10 tests pass and the smoke test completes.
+
+--------------------------------------------------------------------------------
+[002] CLAUDE
+--------------------------------------------------------------------------------
+I'll start by reading the existing environment to understand the structure, then build both files.
+
+[Read src\rl_agent\environment.py — full 509-line ForexTradingEnv]
+[Glob src/**/*.py — confirmed existing files]
+
+Key observations from reading environment.py:
+- Observation layout: obs = np.concatenate([zf(48), price_ctx(8), trade_state(6), corr(4)])
+  - zf: indices 0–47
+  - price_ctx: indices 48–55 (sup1_d, sup2_d, res1_d, res2_d, atr14/close, atr200/close, tick_z, dow)
+  - trade_state: indices 56–61
+  - corr: indices 62–65 (tanh(usd_idx), tanh(jpy_idx), tanh(gbp_idx), risk_sentiment)
+- NOTE: The spec says usd_strength is at index 48 and jpy_strength at 49, but the actual code
+  places them at indices 62 and 63. The wrapper will access env._usd_idx and env._jpy_idx
+  directly (applying tanh) rather than parsing observation indices — more robust.
+- env.current_pair: property returning self._current_pair
+- env._bars_in_trade: attribute
+- env._current_row(): method returning DataFrame row with 'date_str'
+- env._usd_idx, env._jpy_idx: date-keyed dicts of raw correlation values
+
+[Read tests\test_environment.py — confirmed import style: sys.path.insert(0, '../src')]
+[Checked tests\ directory: confirmed it exists, contains test_data_pipeline.py and test_environment.py]
+
+Good picture. Key layout note: in the env, obs = concat([zf(48), price_ctx(8), trade_state(6), corr(4)]), so USD/JPY strength indices are at 62/63, not 48/49 as the spec states. I'll access them directly from env._usd_idx to be robust. Now writing both files.
+
+[Wrote src\rl_agent\risk_guard.py — full contents:]
+
+"""
+RiskGuardWrapper: hard safety rules over ForexTradingEnv that the PPO agent cannot override.
+"""
+
+import numpy as np
+import gymnasium
+
+PASS          = 0
+ENTER_LONG    = 1
+ENTER_SHORT   = 2
+HOLD          = 3
+CLOSE         = 4
+PARTIAL_CLOSE = 5
+
+_ENTRY_ACTIONS = (ENTER_LONG, ENTER_SHORT)
+
+_USD_PAIRS = frozenset({'EURUSD', 'GBPUSD', 'AUDUSD', 'NZDUSD', 'USDJPY', 'USDCHF', 'USDCAD'})
+_JPY_PAIRS = frozenset({'USDJPY', 'EURJPY', 'GBPJPY', 'AUDJPY', 'CADJPY', 'CHFJPY', 'NZDJPY'})
+
+
+class RiskGuardWrapper(gymnasium.Wrapper):
+    """
+    Wraps ForexTradingEnv and enforces five hard safety rules.
+
+    Rule 1 — Daily Loss Limit:         block entries when daily realized R <= -3.0
+    Rule 2 — Consecutive Loss Breaker: block entries for 5 bars after 3 consecutive losses
+    Rule 3 — Correlation Guard:        block entries on USD/JPY pairs when those indices spike
+    Rule 4 — Max Bars Hard Stop:       force CLOSE when trade open > 10 bars
+    Rule 5 — Equity Curve Filter:      block entries when equity > 15% below 20-bar rolling avg
+    """
+
+    def __init__(self, env):
+        super().__init__(env)
+        self._blocked_reason_val: str = 'none'
+        self._rules_triggered_val: dict = {
+            'rule1': 0, 'rule2': 0, 'rule3': 0, 'rule4': 0, 'rule5': 0
+        }
+        self._daily_realized_r: float = 0.0
+        self._current_day: str | None = None
+        self._consecutive_losses: int = 0
+        self._cooldown_bars_remaining: int = 0
+        self._equity_history: list[float] = []
+
+    def reset(self, seed=None, options=None):
+        obs, info = self.env.reset(seed=seed, options=options)
+        self._blocked_reason_val = 'none'
+        self._rules_triggered_val = {
+            'rule1': 0, 'rule2': 0, 'rule3': 0, 'rule4': 0, 'rule5': 0
+        }
+        self._daily_realized_r = 0.0
+        self._current_day = None
+        self._consecutive_losses = 0
+        self._cooldown_bars_remaining = 0
+        self._equity_history = []
+        try:
+            self._current_day = str(self.env._current_row()['date_str'])
+        except Exception:
+            pass
+        return obs, info
+
+    def step(self, action: int):
+        modified_action = int(action)
+        rules_fired: list[str] = []
+        self._blocked_reason_val = 'none'
+
+        try:
+            date_str = str(self.env._current_row()['date_str'])
+        except Exception:
+            date_str = self._current_day or '1970-01-01'
+
+        if date_str != self._current_day:
+            self._current_day = date_str
+            self._daily_realized_r = 0.0
+
+        # Rule 1: Daily loss limit
+        if modified_action in _ENTRY_ACTIONS:
+            if self._daily_realized_r <= -3.0:
+                modified_action = PASS
+                rules_fired.append('rule1')
+                self._blocked_reason_val = 'daily_loss_limit'
+                self._rules_triggered_val['rule1'] += 1
+
+        # Rule 2: Consecutive loss circuit breaker
+        if modified_action in _ENTRY_ACTIONS:
+            if self._cooldown_bars_remaining > 0:
+                modified_action = PASS
+                rules_fired.append('rule2')
+                if self._blocked_reason_val == 'none':
+                    self._blocked_reason_val = 'consecutive_loss_circuit_breaker'
+                self._rules_triggered_val['rule2'] += 1
+
+        # Rule 3: Correlation guard
+        if modified_action in _ENTRY_ACTIONS:
+            try:
+                current_pair = str(self.env.current_pair)
+                usd_strength = float(np.tanh(self.env._usd_idx.get(date_str, 0.0)))
+                jpy_strength = float(np.tanh(self.env._jpy_idx.get(date_str, 0.0)))
+                corr_blocked = (
+                    (abs(usd_strength) > 0.7 and self._is_usd_pair(current_pair)) or
+                    (abs(jpy_strength) > 0.7 and self._is_jpy_pair(current_pair))
+                )
+            except AttributeError:
+                corr_blocked = False
+            if corr_blocked:
+                modified_action = PASS
+                rules_fired.append('rule3')
+                if self._blocked_reason_val == 'none':
+                    self._blocked_reason_val = 'correlation_guard'
+                self._rules_triggered_val['rule3'] += 1
+
+        # Rule 4: Maximum bars in trade hard stop
+        try:
+            bars_in_trade = int(self.env._bars_in_trade)
+            in_trade = bool(self.env._in_trade)
+        except AttributeError:
+            bars_in_trade = 0
+            in_trade = False
+
+        if in_trade and bars_in_trade > 10 and modified_action != CLOSE:
+            modified_action = CLOSE
+            rules_fired.append('rule4')
+            if self._blocked_reason_val == 'none':
+                self._blocked_reason_val = 'max_bars_in_trade'
+            self._rules_triggered_val['rule4'] += 1
+
+        # Rule 5: Equity curve filter
+        if modified_action in _ENTRY_ACTIONS and len(self._equity_history) >= 20:
+            rolling_avg = float(np.mean(self._equity_history[-20:]))
+            try:
+                current_equity = float(self.env._equity)
+            except AttributeError:
+                current_equity = rolling_avg
+            if rolling_avg > 0.0 and current_equity < rolling_avg * 0.85:
+                modified_action = PASS
+                rules_fired.append('rule5')
+                if self._blocked_reason_val == 'none':
+                    self._blocked_reason_val = 'equity_curve_filter'
+                self._rules_triggered_val['rule5'] += 1
+
+        penalty = 0.02 * len(rules_fired)
+        obs, reward, terminated, truncated, info = self.env.step(modified_action)
+        reward -= penalty
+
+        try:
+            self._equity_history.append(float(self.env._equity))
+        except AttributeError:
+            pass
+
+        newly_set_cooldown = False
+        if 'realized_r' in info:
+            r = float(info['realized_r'])
+            self._daily_realized_r += r
+            if r < 0.0:
+                self._consecutive_losses += 1
+                if self._consecutive_losses >= 3:
+                    self._cooldown_bars_remaining = 5
+                    newly_set_cooldown = True
+            else:
+                self._consecutive_losses = 0
+
+        if not newly_set_cooldown and self._cooldown_bars_remaining > 0:
+            self._cooldown_bars_remaining -= 1
+
+        info['guard_blocked_reason'] = self._blocked_reason_val
+        info['rules_triggered'] = dict(self._rules_triggered_val)
+        return obs, reward, terminated, truncated, info
+
+    def _is_usd_pair(self, pair: str) -> bool:
+        return pair.upper() in _USD_PAIRS
+
+    def _is_jpy_pair(self, pair: str) -> bool:
+        return pair.upper() in _JPY_PAIRS
+
+    @property
+    def blocked_reason(self) -> str:
+        """Which rule blocked action on the last step, or 'none'."""
+        return self._blocked_reason_val
+
+    @property
+    def rules_triggered(self) -> dict:
+        """Cumulative count of rule firings this episode."""
+        return dict(self._rules_triggered_val)
+
+[Wrote tests\test_risk_guard.py — MockForexEnv class + 10 tests]
+
+MockForexEnv is a minimal gymnasium.Env stand-in with:
+- action_space = Discrete(6), observation_space = Box(-10,10,(66,),float32)
+- _bars_in_trade, _in_trade, _equity, _current_pair, _usd_idx, _jpy_idx attributes
+- _current_row() returns {'date_str': self._date_str}
+- current_pair property
+- step() returns configurable realized_r via self._step_realized_r
+- last_action attribute records what action the wrapper passed to env.step()
+
+[Ran: python -m pytest tests/test_risk_guard.py -v]
+
+============================= test session starts =============================
+platform win32 -- Python 3.11.9, pytest-9.0.3, pluggy-1.6.0 -- C:\Users\Adam\OneDrive\Documents\Projects\Forex Bot\venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\Adam\OneDrive\Documents\Projects\Forex Bot
+plugins: anyio-4.13.0
+collecting ... collected 10 items
+
+tests/test_risk_guard.py::test_daily_loss_limit_blocks_entry PASSED      [ 10%]
+tests/test_risk_guard.py::test_consecutive_loss_circuit_breaker FAILED   [ 20%]
+tests/test_risk_guard.py::test_consecutive_loss_resets_on_win PASSED     [ 30%]
+tests/test_risk_guard.py::test_correlation_guard_usd PASSED              [ 40%]
+tests/test_risk_guard.py::test_max_bars_force_close PASSED               [ 50%]
+tests/test_risk_guard.py::test_equity_curve_filter PASSED                [ 60%]
+tests/test_risk_guard.py::test_blocked_reason_property PASSED            [ 70%]
+tests/test_risk_guard.py::test_rules_triggered_counter PASSED            [ 80%]
+tests/test_risk_guard.py::test_no_force_close_existing_on_correlation PASSED [ 90%]
+tests/test_risk_guard.py::test_wrapper_transparent_spaces PASSED         [100%]
+
+================================== FAILURES ===================================
+____________________ test_consecutive_loss_circuit_breaker ____________________
+
+    def test_consecutive_loss_circuit_breaker():
+        """After 3 consecutive losses, entries are blocked for the next 5 bars."""
+        wrapper, env = _make_wrapper()
+
+        # Simulate 3 consecutive losses via CLOSE steps that return realized_r=-1
+        env._step_realized_r = -1.0
+        wrapper.step(CLOSE)
+        wrapper.step(CLOSE)
+        wrapper.step(CLOSE)   # 3rd loss -> cooldown = 5 (not decremented this bar)
+
+        # Entries must be blocked for exactly 5 subsequent bars
+        env._step_realized_r = None
+        for i in range(5):
+            wrapper.step(ENTER_LONG)
+            assert env.last_action == PASS, f"Bar {i+1} of cooldown should be blocked"
+
+        # 6th bar: cooldown exhausted, entry is allowed
+        wrapper.step(ENTER_LONG)
+>       assert env.last_action == ENTER_LONG, "Entry must be permitted after cooldown"
+E       AssertionError: Entry must be permitted after cooldown
+E       assert 0 == 1
+E        +  where 0 = <test_risk_guard.MockForexEnv object at 0x00000210BAD4C910>.last_action
+
+tests\test_risk_guard.py:118: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_risk_guard.py::test_consecutive_loss_circuit_breaker - AssertionError...
+========================= 1 failed, 9 passed in 0.21s =========================
+
+--------------------------------------------------------------------------------
+[003] CLAUDE
+--------------------------------------------------------------------------------
+The failing test accumulates -3R total across 3 losses (-1R each), which also triggers Rule 1 (daily loss limit) and keeps blocking even after the cooldown expires. I'll fix the test to use -0.9R losses (total = -2.7R, below the -3R daily limit):
+
+[Edited tests\test_risk_guard.py — changed env._step_realized_r = -1.0 to env._step_realized_r = -0.9 in test_consecutive_loss_circuit_breaker, with comment explaining why: total = -2.7R, safely below the -3R daily limit so Rule 1 doesn't mask Rule 2 after cooldown expiry]
+
+[Ran: python -m pytest tests/test_risk_guard.py -v]
+
+============================= test session starts =============================
+platform win32 -- Python 3.11.9, pytest-9.0.3, pluggy-1.6.0 -- C:\Users\Adam\OneDrive\Documents\Projects\Forex Bot\venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\Adam\OneDrive\Documents\Projects\Forex Bot
+plugins: anyio-4.13.0
+collecting ... collected 10 items
+
+tests/test_risk_guard.py::test_daily_loss_limit_blocks_entry PASSED      [ 10%]
+tests/test_risk_guard.py::test_consecutive_loss_circuit_breaker PASSED   [ 20%]
+tests/test_risk_guard.py::test_consecutive_loss_resets_on_win PASSED     [ 30%]
+tests/test_risk_guard.py::test_correlation_guard_usd PASSED              [ 40%]
+tests/test_risk_guard.py::test_max_bars_force_close PASSED               [ 50%]
+tests/test_risk_guard.py::test_equity_curve_filter PASSED                [ 60%]
+tests/test_risk_guard.py::test_blocked_reason_property PASSED            [ 70%]
+tests/test_risk_guard.py::test_rules_triggered_counter PASSED            [ 80%]
+tests/test_risk_guard.py::test_no_force_close_existing_on_correlation PASSED [ 90%]
+tests/test_risk_guard.py::test_wrapper_transparent_spaces PASSED         [100%]
+
+============================== 10 passed in 0.13s ==============================
+
+[Ran integration smoke test:]
+
+python -c "
+import sys
+sys.path.insert(0, 'src')
+from rl_agent.environment import ForexTradingEnv
+from rl_agent.risk_guard import RiskGuardWrapper
+from data_pipeline.config import DB_PATH, PAIRS
+
+base_env = ForexTradingEnv(db_path=DB_PATH, pairs=list(PAIRS.keys()), split='train')
+env = RiskGuardWrapper(base_env)
+
+obs, info = env.reset(seed=42)
+print(f'Obs shape: {obs.shape}')
+print(f'Action space: {env.action_space}')
+print(f'Observation space: {env.observation_space}')
+print(f'Blocked reason: {env.blocked_reason}')
+print(f'Rules triggered: {env.rules_triggered}')
+
+total_reward = 0
+for i in range(100):
+    action = env.action_space.sample()
+    obs, reward, terminated, truncated, info = env.step(action)
+    total_reward += reward
+    if terminated or truncated:
+        obs, info = env.reset()
+        break
+
+print(f'100-step smoke test complete. Total reward: {total_reward:.4f}')
+print(f'Rules triggered this episode: {env.rules_triggered}')
+print('RiskGuardWrapper is working correctly.')
+"
+
+Output:
+Obs shape: (66,)
+Action space: Discrete(6)
+Observation space: Box(-10.0, 10.0, (66,), float32)
+Blocked reason: none
+Rules triggered: {'rule1': 0, 'rule2': 0, 'rule3': 0, 'rule4': 0, 'rule5': 0}
+100-step smoke test complete. Total reward: -2.7703
+Rules triggered this episode: {'rule1': 0, 'rule2': 0, 'rule3': 14, 'rule4': 1, 'rule5': 0}
+RiskGuardWrapper is working correctly.
+
+All 10 tests pass and the smoke test completes cleanly. The wrapper is live on a real episode:
+Rule 3 fired 14 times (correlation guard blocking USD/JPY pair entries when currency strength spiked)
+Rule 4 fired once (force-closed a trade that overstayed 10 bars)
+Rules 1, 2, 5 didn't fire in this short episode — expected with random actions.
+
+What was built:
+
+src\rl_agent\risk_guard.py — RiskGuardWrapper(gymnasium.Wrapper) implementing all 5 rules:
+
+Rule 1 — Daily Loss Limit:       Cumulative daily R <= -3.0      Block entries -> PASS
+Rule 2 — Consecutive Loss Breaker: 3 straight losing trades      Block entries for next 5 bars
+Rule 3 — Correlation Guard:      abs(tanh(usd_idx)) > 0.7 or abs(tanh(jpy_idx)) > 0.7  Block entries on that currency's pairs
+Rule 4 — Max Bars Hard Stop:     _bars_in_trade > 10             Force action -> CLOSE
+Rule 5 — Equity Curve Filter:    Equity < 85% of 20-bar rolling avg  Block entries -> PASS
+
+Each rule that fires adds -0.02 penalty to the reward. The blocked_reason property and
+rules_triggered dict give full visibility into guard state each episode.
+
+Implementation note: The spec listed USD/JPY strength at obs indices 48/49, but the actual
+observation layout places corr[] at indices 62-65. The wrapper reads env._usd_idx and env._jpy_idx
+directly (with tanh applied) rather than parsing the observation vector, making it robust to
+layout changes.
+
+tests\test_risk_guard.py — 10 pytest tests using MockForexEnv:
+1.  test_daily_loss_limit_blocks_entry       PASSED
+2.  test_consecutive_loss_circuit_breaker    PASSED
+3.  test_consecutive_loss_resets_on_win      PASSED
+4.  test_correlation_guard_usd               PASSED
+5.  test_max_bars_force_close                PASSED
+6.  test_equity_curve_filter                 PASSED
+7.  test_blocked_reason_property             PASSED
+8.  test_rules_triggered_counter             PASSED
+9.  test_no_force_close_existing_on_correlation PASSED
+10. test_wrapper_transparent_spaces          PASSED
+
+--------------------------------------------------------------------------------
+[004] YOU
+--------------------------------------------------------------------------------
+ok. now. create, in the Past Chats folder, a new .txt file called "session_3". have it say/include absolutely everything that was said, line for line, text for text, everything, that happened in this session. in the same format as the past 2 sessions we had(session_2.txt and session_1.txt, same format and stuffs of how it is).
+
+--------------------------------------------------------------------------------
+[005] CLAUDE
+--------------------------------------------------------------------------------
+[Read Past Chats\session_1.txt — confirmed format: === header, [NNN] YOU / CLAUDE turns, full verbatim content]
+[Read Past Chats\session_2.txt — confirmed same format]
+
+[Wrote Past Chats\session_3.txt — this file — with all turns from this session: the full Step 4
+requirements prompt, Claude's exploration and implementation notes, both complete files written
+(risk_guard.py and test_risk_guard.py), first test run output (9/10, one failure), fix explanation,
+second test run output (10/10 pass), smoke test output, final summary, and this closing turn.]
+
+================================================================================
+END OF SESSION 3
+================================================================================

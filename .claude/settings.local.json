@@ -13,7 +13,10 @@
       "Bash(git add *)",
       "Bash(venv\\\\Scripts\\\\python.exe -c \"import gymnasium; print\\(gymnasium.__version__\\)\")",
       "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\Adam\\\\OneDrive\\\\Documents\" -Directory -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -match \"past\" -or $_.Name -match \"chat\" } | Select-Object FullName)",
-      "PowerShell(Rename-Item -LiteralPath \"C:\\\\Users\\\\Adam\\\\OneDrive\\\\Documents\\\\Projects\\\\Forex Bot\\\\Past Chats\\\\session_forex_bot_data_pipeline.txt\" -NewName \"session_1.txt\")"
+      "PowerShell(Rename-Item -LiteralPath \"C:\\\\Users\\\\Adam\\\\OneDrive\\\\Documents\\\\Projects\\\\Forex Bot\\\\Past Chats\\\\session_forex_bot_data_pipeline.txt\" -NewName \"session_1.txt\")",
+      "Bash(python -m pytest tests\\\\test_risk_guard.py -v)",
+      "Bash(python -m pytest \"tests/test_risk_guard.py\" -v)",
+      "Bash(python -c ' *)"
     ]
   }
 }
