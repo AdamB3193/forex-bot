@@ -16,9 +16,9 @@
     "lstm_layers": 2,
     "fc1_out": 512
   },
-  "n_trials_total": 5,
-  "n_trials_completed": 5,
-  "n_trials_pruned": 0,
+  "n_trials_total": 80,
+  "n_trials_completed": 10,
+  "n_trials_pruned": 70,
   "top_5_trials": [
     {
       "trial": 0,
@@ -78,8 +78,27 @@
       }
     },
     {
-      "trial": 1,
-      "oos_sharpe": -0.161108,
+      "trial": 5,
+      "oos_sharpe": 0.0,
+      "params": {
+        "learning_rate": 4.3284502212938785e-05,
+        "n_steps": 512,
+        "batch_size": 64,
+        "gamma": 0.9932221896741693,
+        "gae_lambda": 0.9541003510568888,
+        "clip_range": 0.2416145155592091,
+        "n_epochs": 5,
+        "ent_coef": 0.00026587543983272726,
+        "vf_coef": 0.38636872540532546,
+        "max_grad_norm": 0.4283831568974037,
+        "lstm_hidden": 128,
+        "lstm_layers": 2,
+        "fc1_out": 512
+      }
+    },
+    {
+      "trial": 6,
+      "oos_sharpe": 0.0,
       "params": {
         "learning_rate": 5.954553793888986e-05,
         "n_steps": 512,
@@ -94,25 +113,6 @@
         "lstm_hidden": 128,
         "lstm_layers": 1,
         "fc1_out": 128
-      }
-    },
-    {
-      "trial": 4,
-      "oos_sharpe": -0.500661,
-      "params": {
-        "learning_rate": 7.728716861851788e-05,
-        "n_steps": 512,
-        "batch_size": 128,
-        "gamma": 0.9753776774891186,
-        "gae_lambda": 0.9816809826533484,
-        "clip_range": 0.14985844582977498,
-        "n_epochs": 5,
-        "ent_coef": 0.00014254757044027455,
-        "vf_coef": 0.467313589685326,
-        "max_grad_norm": 0.4128549010778031,
-        "lstm_hidden": 64,
-        "lstm_layers": 1,
-        "fc1_out": 256
       }
     }
   ],
@@ -136,6 +136,26 @@
     {
       "trial": 4,
       "value": -0.500661
+    },
+    {
+      "trial": 5,
+      "value": 0.0
+    },
+    {
+      "trial": 6,
+      "value": 0.0
+    },
+    {
+      "trial": 7,
+      "value": 0.0
+    },
+    {
+      "trial": 8,
+      "value": 0.0
+    },
+    {
+      "trial": 9,
+      "value": 0.0
     }
   ]
 }
