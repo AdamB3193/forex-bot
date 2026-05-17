@@ -54,7 +54,7 @@ SPREADS = {
 }
 
 # Database and data paths - all relative to project root
-_ROOT = r'C:\Users\Adam\OneDrive\Documents\Projects\Forex Bot'
+_ROOT = r'C:\Users\Adam\Downloads\Main Trading Bot\Projects\Forex Bot'
 DB_PATH            = os.path.join(_ROOT, 'data', 'db', 'forex_bot.db')
 RAW_DATA_DIR       = os.path.join(_ROOT, 'data', 'raw')
 PROCESSED_DATA_DIR = os.path.join(_ROOT, 'data', 'processed')

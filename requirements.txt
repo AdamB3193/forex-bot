@@ -1,15 +1,43 @@
+# Nick Shawn Forex Bot — requirements.txt
+# Python 3.11.9
+# NOTE: Use 'ta' library only. Do NOT install pandas-ta (no Python 3.11 support).
+# NOTE: Never install jupyter (Windows path-too-long issue in venv).
+# All ATR calculations use pandas EWM — not any ta library function.
+
+# ── Data & math ───────────────────────────────────────────────────────────────
 pandas>=2.0.0
 numpy>=1.24.0
 scipy>=1.11.0
 scikit-learn>=1.3.0
+
+# ── Networking / data download ────────────────────────────────────────────────
 requests>=2.31.0
 pytz>=2023.3
 python-dateutil>=2.8.2
-ta>=0.10.2
 dukascopy-python>=0.1.0
+
+# ── Technical indicators (use 'ta' — NOT pandas-ta) ──────────────────────────
+ta>=0.10.2
+
+# ── Database ──────────────────────────────────────────────────────────────────
 sqlalchemy>=2.0.0
+
+# ── Reinforcement learning ────────────────────────────────────────────────────
+gymnasium>=0.29.0
+stable-baselines3>=2.8.0
+torch>=2.0.0
+
+# ── Hyperparameter optimization (Step 6) ─────────────────────────────────────
+optuna>=3.6.1
+optuna-integration>=0.1.0
+
+# ── Logging & progress ────────────────────────────────────────────────────────
 tqdm>=4.65.0
 rich>=13.0.0
-pytest>=8.0.0
+
+# ── Plotting ──────────────────────────────────────────────────────────────────
 matplotlib>=3.7.0
 seaborn>=0.12.0
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+pytest>=8.0.0

@@ -33,13 +33,17 @@ class ForexTradingEnv(gymnasium.Env):
     metadata = {'render_modes': ['human']}
 
     def __init__(self, db_path, pairs, split='train', window_size=252,
-                 initial_equity=100_000.0):
+                 initial_equity=100_000.0,
+                 date_start=None,
+                 date_end=None):
         super().__init__()
         self.db_path = db_path
         self.pairs = list(pairs)
         self.split = split
         self.window_size = window_size
         self.initial_equity = float(initial_equity)
+        self.date_start = date_start
+        self.date_end   = date_end
 
         self.action_space = gymnasium.spaces.Discrete(6)
         self.observation_space = gymnasium.spaces.Box(
@@ -82,13 +86,22 @@ class ForexTradingEnv(gymnasium.Env):
     def _load_data(self):
         conn = sqlite3.connect(self.db_path)
         for pair in self.pairs:
+            _where  = "pair = ? AND split_set = ? AND is_anomaly = 0"
+            _params = [pair, self.split]
+            if self.date_start:
+                _where  += " AND date >= ?"
+                _params.append(self.date_start)
+            if self.date_end:
+                _where  += " AND date <= ?"
+                _params.append(self.date_end)
+
             df = pd.read_sql_query(
-                """SELECT date, open, high, low, close, tick_volume,
+                f"""SELECT date, open, high, low, close, tick_volume,
                           tick_vol_zscore, atr_14, atr_200, spread_est
                    FROM raw_ohlcv
-                   WHERE pair = ? AND split_set = ? AND is_anomaly = 0
+                   WHERE {_where}
                    ORDER BY date ASC""",
-                conn, params=(pair, self.split)
+                conn, params=_params
             )
             if df.empty:
                 self._data[pair] = df
