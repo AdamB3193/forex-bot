@@ -4,7 +4,7 @@ Deep reinforcement learning forex trading bot implementing Nick Shawn's S&R zone
 
 ## Project Status
 
-**Steps 1–6 complete. 51/51 tests passing.**
+**Steps 1–7 complete. 62/62 tests passing.**
 
 | Step | Component | Status |
 |------|-----------|--------|
@@ -14,8 +14,8 @@ Deep reinforcement learning forex trading bot implementing Nick Shawn's S&R zone
 | 4 | Risk Guard Wrapper (5 rules) | ✅ Complete |
 | 5 | PPO Trainer + LSTM Feature Extractor | ✅ Complete |
 | 6 | Hyperparameter Optimization (Optuna) | ✅ Complete |
-| 7 | MT5 Live Execution | Pending |
-| 8 | Paper Trading | Pending |
+| 7 | MT5 Live Execution + Final Training | ✅ Complete |
+| 8 | Paper Trading | 🔄 Active |
 
 ## Project Structure
 ```
@@ -29,7 +29,8 @@ Forex Bot/
 ├── src/
 │   ├── data_pipeline/     # Step 1: download, clean, validate, store
 │   ├── zone_engine/       # Step 2: LuxAlgo S&R port + Nick extensions
-│   └── rl_agent/          # Steps 3–6: environment, risk guard, trainer, hyperopt
+│   ├── rl_agent/          # Steps 3–6: environment, risk guard, trainer, hyperopt
+│   └── execution/         # Step 7: MT5 live executor
 ├── tests/                 # 51 pytest tests (all passing)
 ├── logs/                  # Validation reports (gitignored)
 └── Past Chats/            # Full session logs

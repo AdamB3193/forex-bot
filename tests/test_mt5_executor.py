@@ -194,12 +194,47 @@ def test_zone_stop_tp_sl_on_correct_side():
     assert tp_s < close, "Short TP must be below close"
 
 
-# Test 10: MT5Executor.connect calls correct MT5 functions
-def test_executor_connect_calls_mt5(tmp_path):
+# Test 10: connect() reuses existing MT5 session (no login call)
+def test_executor_connect_uses_existing_session(tmp_path):
+    """
+    When MT5 terminal is already logged in (account_info returns data),
+    connect() must return True without ever calling mt5.login().
+    This is the primary path — MT5 is usually already running.
+    """
     mock_mt5.initialize   = MagicMock(return_value=True)
     mock_mt5.login        = MagicMock(return_value=True)
-    ai = MagicMock(); ai.login = 50506004795; ai.equity = 100_000.0; ai.server = "MetaQuotes-Demo"
+    ai = MagicMock()
+    ai.login  = 50506004795
+    ai.equity = 100_000.0
+    ai.server = "MetaQuotes-Demo"
     mock_mt5.account_info = MagicMock(return_value=ai)
+    mock_mt5.shutdown     = MagicMock()
+    orig = exe.LIVE_STATE_PATH; exe.LIVE_STATE_PATH = tmp_path / "ls.json"
+    exe.MT5_AVAILABLE = True; exe.mt5 = mock_mt5
+    try:
+        result = MT5Executor(password="testpwd").connect()
+        assert result is True
+        mock_mt5.initialize.assert_called_once()
+        mock_mt5.login.assert_not_called()   # existing session — login skipped
+    finally:
+        exe.LIVE_STATE_PATH = orig
+
+
+# Test 11: connect() calls login() when terminal is open but not authenticated
+def test_executor_connect_calls_login_when_needed(tmp_path):
+    """
+    When MT5 terminal is running but NOT logged in (account_info returns None),
+    connect() must call mt5.login() with the correct credentials.
+    """
+    mock_mt5.initialize   = MagicMock(return_value=True)
+    mock_mt5.login        = MagicMock(return_value=True)
+    ai = MagicMock()
+    ai.login  = 50506004795
+    ai.equity = 100_000.0
+    ai.server = "MetaQuotes-Demo"
+    # First call (in connect check) returns None — not logged in yet
+    # Second call (after login) returns account info
+    mock_mt5.account_info = MagicMock(side_effect=[None, ai])
     mock_mt5.shutdown     = MagicMock()
     orig = exe.LIVE_STATE_PATH; exe.LIVE_STATE_PATH = tmp_path / "ls.json"
     exe.MT5_AVAILABLE = True; exe.mt5 = mock_mt5
