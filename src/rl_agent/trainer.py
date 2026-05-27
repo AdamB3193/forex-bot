@@ -63,13 +63,13 @@ class LSTMFeatureExtractor(BaseFeaturesExtractor):
         return self.fc(out)               # (batch, fc2_out=128)
 
 
-def make_env(db_path, pairs, split='train', window_size=252, seed=None):
-    """Return a thunk that creates ForexTradingEnv wrapped in RiskGuardWrapper."""
+def make_env(db_path, pairs, split='train', window_size=252, use_reward_shaping=False):
     def _init():
         env = ForexTradingEnv(
-            db_path=db_path, pairs=pairs, split=split, window_size=window_size,
+            db_path=db_path, pairs=pairs, split=split,
+            window_size=window_size, use_reward_shaping=use_reward_shaping
         )
-        return RiskGuardWrapper(env)
+        return Monitor(RiskGuardWrapper(env))
     return _init
 
 

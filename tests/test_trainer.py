@@ -98,7 +98,8 @@ def test_make_env_callable():
     thunk = make_env(DB_PATH, _PAIRS, split='train', window_size=_WINDOW)
     assert callable(thunk)
     env = thunk()
-    assert isinstance(env, RiskGuardWrapper)
+    inner = env.env if hasattr(env, 'env') else env
+    assert isinstance(inner, RiskGuardWrapper)
     env.close()
 
 

@@ -35,7 +35,8 @@ class ForexTradingEnv(gymnasium.Env):
     def __init__(self, db_path, pairs, split='train', window_size=252,
                  initial_equity=100_000.0,
                  date_start=None,
-                 date_end=None):
+                 date_end=None,
+                 use_reward_shaping: bool = False):
         super().__init__()
         self.db_path = db_path
         self.pairs = list(pairs)
@@ -80,6 +81,13 @@ class ForexTradingEnv(gymnasium.Env):
         self._remaining_fraction: float = 1.0  # fraction of position still open
 
         self._rng = np.random.default_rng()
+
+        # ── Reward shaping (off by default; enabled in final_trainer.py) ─────────
+        self._use_reward_shaping  = use_reward_shaping
+        self._ENTRY_ZONE_COEF     = 0.12   # max bonus for entry exactly at zone midpoint
+        self._ZONE_DIST_CAP       = 1.5    # ATR units beyond which entry bonus is zero
+        self._HOLD_WINNER_BONUS   = 0.008  # per-bar bonus while holding unrealized_r > 0.25
+        self._EARLY_CUT_BONUS     = 0.025  # bonus for model-initiated close of losing trade
 
     # ── Data loading ────────────────────────────────────────────────────────
 
@@ -235,6 +243,12 @@ class ForexTradingEnv(gymnasium.Env):
     def step(self, action: int):
         assert self._current_pair is not None, "Call reset() before step()"
 
+        # ── Snapshot state before action (used by reward shaping at end) ─────────
+        _pre_in_trade = self._in_trade
+        _bar_before   = self._bar_idx()
+        _close_before = float(self._current_row()['close'])
+        _zf_before    = self._zone_features[self._current_pair][_bar_before].copy()
+
         row = self._current_row()
         close   = float(row['close'])
         atr14   = max(float(row['atr_14']),  1e-8)
@@ -318,6 +332,27 @@ class ForexTradingEnv(gymnasium.Env):
         truncated  = self._current_step >= self.window_size
         info.update({'equity': self._equity, 'pair': self._current_pair,
                      'step': self._current_step})
+
+        # ── Reward shaping ────────────────────────────────────────────────────────
+        if self._use_reward_shaping:
+            # 1. Zone entry bonus — reward entering near S&R zone midpoint
+            if (not _pre_in_trade) and self._in_trade:
+                dist = (abs(float(_zf_before[1]))
+                        if self._trade_direction == 1
+                        else abs(float(_zf_before[25])))
+                if dist < self._ZONE_DIST_CAP:
+                    reward += self._ENTRY_ZONE_COEF * max(0.0, 1.0 - dist / self._ZONE_DIST_CAP)
+
+            # 2. Hold winner — tiny per-bar bonus for holding a profitable trade
+            if _pre_in_trade and self._in_trade:
+                if self._unrealized_r(_close_before) > 0.25:
+                    reward += self._HOLD_WINNER_BONUS
+
+            # 3. Early cut — bonus for model-initiated close of a losing trade
+            if _pre_in_trade and (not self._in_trade) and action == CLOSE:
+                if info.get('realized_r', 0.0) < 0.0:
+                    reward += self._EARLY_CUT_BONUS
+
         return obs, reward, terminated, truncated, info
 
     # ── Observation ──────────────────────────────────────────────────────────

@@ -106,7 +106,7 @@ def run_final_training(
     print("=" * W)
 
     train_vec_env = make_vec_env(
-        make_env(str(DB_PATH), all_pairs, split="train"),
+        make_env(str(DB_PATH), all_pairs, split="train", use_reward_shaping=True),
         n_envs=n_envs,
         seed=seed,
         vec_env_cls=DummyVecEnv,
