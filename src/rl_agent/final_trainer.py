@@ -138,7 +138,7 @@ def run_final_training(
         gae_lambda=float(params["gae_lambda"]),
         clip_range=float(params["clip_range"]),
         n_epochs=int(params["n_epochs"]),
-        ent_coef=float(params["ent_coef"]),
+        ent_coef=0.02,          # overrides hyperopt best — higher entropy for zone exploration
         vf_coef=float(params["vf_coef"]),
         max_grad_norm=float(params["max_grad_norm"]),
         policy_kwargs=policy_kwargs,

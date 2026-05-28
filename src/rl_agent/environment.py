@@ -353,6 +353,16 @@ class ForexTradingEnv(gymnasium.Env):
                 if info.get('realized_r', 0.0) < 0.0:
                     reward += self._EARLY_CUT_BONUS
 
+            # 4. Missed-zone penalty — penalise PASS/HOLD when near a valid zone
+            if (not _pre_in_trade) and action in (PASS, HOLD):
+                sup_valid = float(np.sum(np.abs(_zf_before[0:12])))  > 1e-6
+                res_valid = float(np.sum(np.abs(_zf_before[24:36]))) > 1e-6
+                sup_dist  = abs(float(_zf_before[1]))  if sup_valid  else 999.0
+                res_dist  = abs(float(_zf_before[25])) if res_valid  else 999.0
+                min_dist  = min(sup_dist, res_dist)
+                if min_dist < 1.0:
+                    reward -= 0.05 * max(0.0, 1.0 - min_dist)
+
         return obs, reward, terminated, truncated, info
 
     # ── Observation ──────────────────────────────────────────────────────────
