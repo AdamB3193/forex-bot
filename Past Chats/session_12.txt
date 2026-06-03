@@ -1,0 +1,51 @@
+================================================================================
+CLAUDE CODE SESSION -- FOREX BOT MT5 ORDER FILLING FIX
+Session Date: 2026-06-02
+================================================================================
+
+--------------------------------------------------------------------------------
+[001] YOU
+--------------------------------------------------------------------------------
+Read src\execution\mt5_executor.py in full.
+
+Find the order request dictionary that gets passed to mt5.order_send().
+It will have a "type_filling" key. Change its value to mt5.ORDER_FILLING_RETURN.
+
+If ORDER_FILLING_RETURN is not already imported or used, add it to the request dict.
+Save the file.
+
+--------------------------------------------------------------------------------
+[002] CLAUDE
+--------------------------------------------------------------------------------
+Read the full file (673 lines). Found three separate order request dictionaries, each passed to mt5.order_send(), all using "type_filling": mt5.ORDER_FILLING_IOC:
+
+1. open_position() method -- line 301:
+   "type_time": mt5.ORDER_TIME_GTC, "type_filling": mt5.ORDER_FILLING_IOC,
+
+2. close_position() method -- line 321:
+   "type_time": mt5.ORDER_TIME_GTC, "type_filling": mt5.ORDER_FILLING_IOC,
+
+3. partial_close_position() method -- line 343:
+   "type_time": mt5.ORDER_TIME_GTC, "type_filling": mt5.ORDER_FILLING_IOC,
+
+The mt5 module is already imported at the top of the file (import MetaTrader5 as mt5), so mt5.ORDER_FILLING_RETURN is accessible without any additional import.
+
+Changed all three occurrences from mt5.ORDER_FILLING_IOC to mt5.ORDER_FILLING_RETURN. All three edits saved successfully.
+
+--------------------------------------------------------------------------------
+[003] YOU
+--------------------------------------------------------------------------------
+ok. now. in the Past Chats folder, create a new .txt file and name it "session_12". like usual you're going to put this entire session into the file, everything we ever said, every text, message, things, all of it that we had in this session into this file. do it all in the same format as all of the other files that are in the Past Chats folder(same format as session_1.txt, session_2.txt, session_3.txt, etc and so on... by reading the other session folder's you should understand how I want/like it/what I want you to do. basically I always do this to keep a full log of absolutely everything, even the sessions I have with you but ye.
+
+--------------------------------------------------------------------------------
+[004] CLAUDE
+--------------------------------------------------------------------------------
+Read session_1.txt and session_2.txt to match the exact format. Also checked session_3.txt and session_4.txt headers to confirm consistent formatting across all sessions.
+
+Created this file: Past Chats\session_12.txt
+
+Contains the full transcript of this session -- all messages from both sides, word for word, in the same numbered turn format used across all prior session files.
+
+================================================================================
+END OF SESSION 12
+================================================================================

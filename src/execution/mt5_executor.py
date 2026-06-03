@@ -298,7 +298,7 @@ class PositionManager:
             "volume": float(lot_size), "type": otype, "price": float(price),
             "sl": float(stop_loss), "tp": float(take_profit),
             "deviation": 20, "magic": MT5_MAGIC, "comment": comment,
-            "type_time": mt5.ORDER_TIME_GTC, "type_filling": mt5.ORDER_FILLING_IOC,
+            "type_time": mt5.ORDER_TIME_GTC, "type_filling": mt5.ORDER_FILLING_RETURN,
         }
         result = mt5.order_send(req)
         ok = result is not None and result.retcode == mt5.TRADE_RETCODE_DONE
@@ -318,7 +318,7 @@ class PositionManager:
             "volume": float(position.volume), "type": otype,
             "position": position.ticket, "price": float(price),
             "deviation": 20, "magic": MT5_MAGIC, "comment": "NickShawn_RL_close",
-            "type_time": mt5.ORDER_TIME_GTC, "type_filling": mt5.ORDER_FILLING_IOC,
+            "type_time": mt5.ORDER_TIME_GTC, "type_filling": mt5.ORDER_FILLING_RETURN,
         }
         result = mt5.order_send(req)
         ok = result is not None and result.retcode == mt5.TRADE_RETCODE_DONE
@@ -339,7 +339,7 @@ class PositionManager:
             "volume": float(vol), "type": otype, "position": position.ticket,
             "price": float(price), "deviation": 20, "magic": MT5_MAGIC,
             "comment": "NickShawn_RL_partial",
-            "type_time": mt5.ORDER_TIME_GTC, "type_filling": mt5.ORDER_FILLING_IOC,
+            "type_time": mt5.ORDER_TIME_GTC, "type_filling": mt5.ORDER_FILLING_RETURN,
         }
         result = mt5.order_send(req)
         if result is None or result.retcode != mt5.TRADE_RETCODE_DONE: return False
