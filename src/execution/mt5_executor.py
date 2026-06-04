@@ -287,6 +287,21 @@ class PositionManager:
                    min(float(info.volume_max), round(raw / step) * step))
         return round(lots, 2)
 
+    def _filling_type(self, symbol: str) -> int:
+        """Return the filling mode supported by this symbol on this server."""
+        if not MT5_AVAILABLE or mt5 is None:
+            return mt5.ORDER_FILLING_IOC
+        info = mt5.symbol_info(symbol)
+        if info is None:
+            return mt5.ORDER_FILLING_IOC
+        fm = getattr(info, 'filling_mode', 0)
+        if fm & 2:
+            return mt5.ORDER_FILLING_IOC
+        elif fm & 1:
+            return mt5.ORDER_FILLING_FOK
+        else:
+            return mt5.ORDER_FILLING_RETURN
+
     def open_position(self, symbol, direction, entry_price,
                       stop_loss, take_profit, lot_size, comment="NickShawn_RL") -> bool:
         if not MT5_AVAILABLE: return False
@@ -298,7 +313,7 @@ class PositionManager:
             "volume": float(lot_size), "type": otype, "price": float(price),
             "sl": float(stop_loss), "tp": float(take_profit),
             "deviation": 20, "magic": MT5_MAGIC, "comment": comment,
-            "type_time": mt5.ORDER_TIME_GTC, "type_filling": mt5.ORDER_FILLING_RETURN,
+            "type_time": mt5.ORDER_TIME_GTC, "type_filling": self._filling_type(symbol),
         }
         result = mt5.order_send(req)
         ok = result is not None and result.retcode == mt5.TRADE_RETCODE_DONE
@@ -318,7 +333,7 @@ class PositionManager:
             "volume": float(position.volume), "type": otype,
             "position": position.ticket, "price": float(price),
             "deviation": 20, "magic": MT5_MAGIC, "comment": "NickShawn_RL_close",
-            "type_time": mt5.ORDER_TIME_GTC, "type_filling": mt5.ORDER_FILLING_RETURN,
+            "type_time": mt5.ORDER_TIME_GTC, "type_filling": self._filling_type(position.symbol),
         }
         result = mt5.order_send(req)
         ok = result is not None and result.retcode == mt5.TRADE_RETCODE_DONE
@@ -339,7 +354,7 @@ class PositionManager:
             "volume": float(vol), "type": otype, "position": position.ticket,
             "price": float(price), "deviation": 20, "magic": MT5_MAGIC,
             "comment": "NickShawn_RL_partial",
-            "type_time": mt5.ORDER_TIME_GTC, "type_filling": mt5.ORDER_FILLING_RETURN,
+            "type_time": mt5.ORDER_TIME_GTC, "type_filling": self._filling_type(position.symbol),
         }
         result = mt5.order_send(req)
         if result is None or result.retcode != mt5.TRADE_RETCODE_DONE: return False
