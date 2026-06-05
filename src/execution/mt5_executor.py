@@ -592,6 +592,19 @@ class MT5Executor:
             if action in (ENTER_LONG, ENTER_SHORT) and not in_trade:
                 d  = 1 if action == ENTER_LONG else -1
                 sl, tp = zone_stop_tp(d, close, atr14, obs[:48])
+
+                # Enforce MT5 minimum stop distance for this symbol
+                if MT5_AVAILABLE:
+                    _si = mt5.symbol_info(pair)
+                    if _si and _si.trade_stops_level > 0:
+                        _min = _si.trade_stops_level * _si.point
+                        if d == 1:   # long
+                            sl = min(sl, close - _min)
+                            tp = max(tp, close + _min)
+                        else:        # short
+                            sl = max(sl, close + _min)
+                            tp = min(tp, close - _min)
+
                 stop_d = abs(close - sl)
                 if stop_d > 1e-8:
                     lots = self.pos_manager.lot_size_from_risk(pair, equity, stop_d)
