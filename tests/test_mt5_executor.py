@@ -122,7 +122,7 @@ def test_lot_size_from_risk():
     lots = PositionManager().lot_size_from_risk("EURUSD", 100_000.0, 0.0030)
     assert lots > 0
     assert lots <= 500.0
-    assert 30.0 <= lots <= 40.0   # ~33 lots expected
+    assert 6.0 <= lots <= 8.0   # ~6.67 lots expected at 2% risk
 
 
 # Test 6: daily loss limit blocks entry
