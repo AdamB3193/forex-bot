@@ -1,0 +1,82 @@
+================================================================================
+CLAUDE CODE SESSION -- FOREX BOT RISK REDUCTION (RISK_PER_TRADE 10% -> 2%)
+================================================================================
+
+--------------------------------------------------------------------------------
+[001] YOU
+--------------------------------------------------------------------------------
+Project root: C:\Users\Adam\Downloads\Main Trading Bot\Projects\Forex Bot
+
+Read src\execution\mt5_executor.py in full.
+
+Find this line near the top of the file:
+RISK_PER_TRADE  = 0.10
+
+Change it to:
+RISK_PER_TRADE  = 0.02
+
+Save the file.
+
+--------------------------------------------------------------------------------
+[002] CLAUDE
+--------------------------------------------------------------------------------
+Reading the file first.
+
+[Read src\execution\mt5_executor.py in full -- 701 lines]
+
+Found RISK_PER_TRADE = 0.10 on line 66. Made the change:
+
+    RISK_PER_TRADE  = 0.02
+
+`RISK_PER_TRADE` on line 66 is now `0.02` (down from `0.10`). The bot will now
+risk 2% of equity per trade instead of 10%.
+
+--------------------------------------------------------------------------------
+[003] YOU
+--------------------------------------------------------------------------------
+Project root: C:\Users\Adam\Downloads\Main Trading Bot\Projects\Forex Bot
+
+Read tests\test_mt5_executor.py in full.
+
+Find this line in test_lot_size_from_risk:
+    assert 30.0 <= lots <= 40.0   # ~33 lots expected
+
+Change it to:
+    assert 6.0 <= lots <= 8.0   # ~6.67 lots expected at 2% risk
+
+Save the file.
+
+--------------------------------------------------------------------------------
+[004] CLAUDE
+--------------------------------------------------------------------------------
+[Read tests\test_mt5_executor.py in full -- 249 lines]
+
+Found the assertion on line 125 in test_lot_size_from_risk. Made the change:
+
+    assert 6.0 <= lots <= 8.0   # ~6.67 lots expected at 2% risk
+
+Line 125 updated. The assertion now matches the 2% risk setting: at $100k equity,
+2% = $2,000 risk / (0.003 stop x 100,000 contract size) = ~6.67 lots.
+
+--------------------------------------------------------------------------------
+[005] YOU
+--------------------------------------------------------------------------------
+ok. now. in the Past Chats folder, create a new .txt file and name it "session_15".
+like usual you're going to put this entire session into the file, everything we ever
+said, every text, message, things, all of it that we had in this session into this
+file. do it all in the same format as all of the other files that are in the Past
+Chats folder(same format as session_1.txt, session_2.txt, session_3.txt, etc and
+so on... by reading the other session folder's you should understand how I want/like
+it/what I want you to do. basically I always do this to keep a full log of
+absolutely everything, even the sessions I have with you but ye.
+
+--------------------------------------------------------------------------------
+[006] CLAUDE
+--------------------------------------------------------------------------------
+[Searched for .txt files in the Projects folder]
+[Read Past Chats\session_1.txt and Past Chats\session_2.txt to match the format]
+[Created Past Chats\session_15.txt with this full session transcript]
+
+================================================================================
+END OF SESSION 15
+================================================================================
